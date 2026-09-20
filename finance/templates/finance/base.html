@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}kiwi{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body class="bg-gray-50 text-gray-900">
+{% if user.is_authenticated %}
+<div class="flex min-h-screen">
+    <aside class="w-56 bg-slate-800 text-slate-100 flex flex-col">
+        <div class="p-4 text-xl font-bold">kiwi</div>
+        <nav class="flex-1 flex flex-col gap-1 px-2">
+            <a href="{% url 'income' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'income' %}bg-slate-700{% endif %}">📈 Поступления</a>
+            <a href="{% url 'expenses' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'expenses' %}bg-slate-700{% endif %}">📉 Расходы</a>
+            <a href="{% url 'plan' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'plan' or 'income_plan' in request.resolver_match.url_name %}bg-slate-700{% endif %}">📋 План</a>
+            <a href="{% url 'fund_transfers' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'fund_transfers' %}bg-slate-700{% endif %}">🔄 Перемещение денег</a>
+            {% if perms.finance.add_operation %}
+            <a href="{% url 'upload' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'upload' %}bg-slate-700{% endif %}">📥 Загрузка файла</a>
+            {% endif %}
+        </nav>
+        <div class="p-4 text-sm text-slate-400 border-t border-slate-700">
+            {{ user.username }}
+            <form method="post" action="{% url 'logout' %}" class="mt-2">
+                {% csrf_token %}
+                <button class="underline">Выйти</button>
+            </form>
+        </div>
+    </aside>
+    <main class="flex-1 p-8">
+        {% for message in messages %}
+        <div class="mb-4 rounded bg-green-100 text-green-800 px-4 py-2">{{ message }}</div>
+        {% endfor %}
+        {% block content %}{% endblock %}
+    </main>
+</div>
+{% else %}
+    {% block guest_content %}{% endblock %}
+{% endif %}
+</body>
+</html>

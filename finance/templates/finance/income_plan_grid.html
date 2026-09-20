@@ -1,0 +1,168 @@
+{% extends "finance/base.html" %}
+{% load finance_extras %}
+{% block title %}Планирование поступлений — kiwi{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-1">🧮 Планирование поступлений</h1>
+<h2 class="text-lg text-gray-600 mb-4">{{ period_title }}</h2>
+<p class="text-sm text-gray-500 mb-4">
+    «Без выходных» — категория/направление приносит выручку и в субботу/воскресенье (план на неделю делится на 7 дней, а не на 5 будних).
+    {% if kind != "year" %}
+    «Текущий план» / «Отредактированный» — редактируете {% if kind == "week" %}дни{% else %}недели{% endif %}, а переключателем решаете:
+    оставить {% if kind == "week" %}недельный{% else %}месячный{% endif %} план как был («текущий план», по умолчанию — можно просто
+    поправить/посмотреть {% if kind == "week" %}один день{% else %}одну неделю{% endif %}, не трогая остальное), или поднять новую сумму
+    выше («отредактированный»).
+    {% endif %}
+    Чекбоксы и переключатели сохраняются вместе с планом, при нажатии «Сохранить план» — отдельно их сохранять не нужно.
+</p>
+
+<form method="post" action="{{ save_url }}" id="plan-form">
+{% csrf_token %}
+<input type="hidden" name="next" value="{{ request.path }}">
+
+<div class="overflow-x-auto bg-white shadow rounded-lg">
+<table class="min-w-full text-sm">
+    <thead>
+        <tr class="bg-slate-100 text-left">
+            <th class="px-3 py-2 whitespace-nowrap">Категория</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">Без выходных</th>
+            {% for col in columns %}
+            <th class="px-3 py-2 text-center whitespace-nowrap">
+                {% if col.nav_url %}<a href="{{ col.nav_url }}" class="text-emerald-700 hover:underline">{{ col.label }}</a>{% else %}{{ col.label }}{% endif %}
+            </th>
+            {% endfor %}
+            {% if kind == "year" %}
+            <th class="px-3 py-2 text-right whitespace-nowrap">TOTAL</th>
+            {% else %}
+            <th class="px-3 py-2 text-right whitespace-nowrap">Текущий план</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">Отредактированный</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">
+                <a href="{{ home_url }}" class="text-violet-700 hover:underline">🏠 Домой</a>
+            </th>
+            {% endif %}
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in table %}
+        <tr class="bg-emerald-800 text-white font-bold">
+            <td class="px-3 py-2 whitespace-nowrap">
+                {% if row.directions %}
+                <button type="button" class="cursor-pointer select-none" data-expanded="false" onclick="toggleIncomePlanCat(this, {{ forloop.counter0 }})">
+                    <span class="arrow">▸</span> {{ row.category }}
+                </button>
+                {% else %}
+                {{ row.category }}
+                {% endif %}
+            </td>
+            <td class="px-3 py-2 text-center">
+                {% if not row.expandable and row.daily_split %}
+                <input type="checkbox" name="{{ row.weekend_field_name }}" {% if row.works_weekends %}checked{% endif %}>
+                {% endif %}
+            </td>
+            {% if kind == "year" %}
+            {% for cell in row.cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
+                {% else %}
+                <div class="px-2 py-1 text-right tabular-nums text-gray-300 italic">{{ cell.value|money0 }}</div>
+                {% endif %}
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums">{{ row.total|money0 }}</td>
+            {% else %}
+            {% for cell in row.cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
+                {% elif cell.value is not None %}
+                <div class="px-2 py-1 text-right tabular-nums text-gray-300 italic">{{ cell.value|money0 }}</div>
+                {% endif %}
+            </td>
+            {% endfor %}
+            {% if row.expandable %}
+            <td colspan="2" class="px-3 py-2 text-right tabular-nums text-gray-300 italic" title="Сумма направлений — вводится по направлениям, не общей цифрой">Σ {{ row.current_total|money0 }}</td>
+            {% elif row.daily_split %}
+            {% include "finance/_income_plan_totals.html" with obj=row %}
+            {% else %}
+            <td colspan="2" class="px-3 py-2 text-right tabular-nums text-gray-300 italic" title="План по дням не ведётся для этой категории — редактируется в месячном/годовом виде">{{ row.current_total|money0 }}</td>
+            {% endif %}
+            <td></td>
+            {% endif %}
+        </tr>
+
+        {% for dir in row.directions %}
+        <tr class="inc-plan-dirrow-{{ forloop.parentloop.counter0 }} hidden border-t">
+            <td class="px-3 py-2 whitespace-nowrap text-gray-600">↳ {{ dir.direction|default:"(без направления)" }}</td>
+            <td class="px-3 py-2 text-center">
+                {% if dir.daily_split %}
+                <input type="checkbox" name="{{ dir.weekend_field_name }}" {% if dir.works_weekends %}checked{% endif %}>
+                {% endif %}
+            </td>
+            {% if kind == "year" %}
+            {% for cell in dir.cells %}
+            <td class="px-1 py-1">
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums bg-gray-100">{{ dir.total|money0 }}</td>
+            {% else %}
+            {% for cell in dir.cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
+                {% endif %}
+            </td>
+            {% endfor %}
+            {% if dir.daily_split %}
+            {% include "finance/_income_plan_totals.html" with obj=dir %}
+            {% else %}
+            <td colspan="2" class="px-3 py-2 text-right tabular-nums text-gray-300 italic" title="План по дням не ведётся для этого направления — редактируется в месячном/годовом виде">{{ dir.current_total|money0 }}</td>
+            {% endif %}
+            <td></td>
+            {% endif %}
+        </tr>
+        {% endfor %}
+        {% endfor %}
+        <tr class="border-t bg-slate-200 font-bold">
+            <td class="px-3 py-2" colspan="2">ИТОГО</td>
+            {% for total in col_totals %}<td class="px-3 py-2 text-right tabular-nums">{{ total|money0 }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind == 'year' %}1{% else %}3{% endif %}">{{ grand_total|money0 }}</td>
+        </tr>
+    </tbody>
+</table>
+</div>
+
+<button type="submit" class="mt-4 bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">💾 Сохранить план</button>
+</form>
+
+<script>
+function toggleIncomePlanCat(btn, idx) {
+    const expanded = btn.dataset.expanded === 'true';
+    document.querySelectorAll('.inc-plan-dirrow-' + idx).forEach(el => el.classList.toggle('hidden', expanded));
+    btn.dataset.expanded = expanded ? 'false' : 'true';
+    btn.querySelector('.arrow').textContent = expanded ? '▸' : '▾';
+}
+
+function parseMoneyInput(s) {
+    return parseFloat((s || '0').replace(/\s| /g, '').replace(',', '.')) || 0;
+}
+
+function recalcEditedTotal(tr) {
+    const span = tr.querySelector('.edited-total');
+    if (!span) return;
+    let total = 0;
+    tr.querySelectorAll('input.plan-cell').forEach(inp => { total += parseMoneyInput(inp.value); });
+    span.textContent = Math.round(total).toLocaleString('ru-RU');
+}
+
+document.addEventListener('input', function (e) {
+    if (e.target.matches('input.plan-cell')) {
+        recalcEditedTotal(e.target.closest('tr'));
+    }
+});
+</script>
+{% endblock %}

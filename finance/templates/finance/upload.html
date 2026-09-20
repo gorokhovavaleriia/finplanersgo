@@ -1,0 +1,26 @@
+{% extends "finance/base.html" %}
+{% block title %}Загрузка файла — kiwi{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-4">Загрузка операций</h1>
+<p class="mb-4 text-gray-600">Сейчас в базе операций: <strong>{{ total }}</strong></p>
+<form method="post" enctype="multipart/form-data" class="bg-white shadow rounded-lg p-6 max-w-md">
+    {% csrf_token %}
+    {% for field in form %}
+    <div class="mb-4">
+        <label class="block text-sm mb-1">{{ field.label }}</label>
+        {{ field }}
+    </div>
+    {% endfor %}
+    <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">Загрузить</button>
+</form>
+
+<h2 class="text-xl font-bold mt-8 mb-4">Синхронизация с Финтабло</h2>
+<div class="bg-white shadow rounded-lg p-6 max-w-md">
+    <p class="mb-4 text-gray-600">Загружено из Финтабло: <strong>{{ fintablo_total }}</strong> операций.</p>
+    <form method="post" action="{% url 'sync_fintablo' %}">
+        {% csrf_token %}
+        <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">🔄 Синхронизировать сейчас</button>
+    </form>
+    <p class="mt-3 text-sm text-gray-500">Подтягивает операции ДДС по токену из finance/data/secret.rtf — полностью, за всё время; повторный запуск не плодит дублей, только обновляет изменившееся. Тот же механизм можно запускать по расписанию: <code>python manage.py sync_fintablo</code>.</p>
+</div>
+{% endblock %}

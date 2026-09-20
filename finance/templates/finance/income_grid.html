@@ -1,0 +1,77 @@
+{% extends "finance/base.html" %}
+{% load finance_extras %}
+{% block title %}Поступления — kiwi{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-1">📈 Поступления</h1>
+<h2 class="text-lg text-gray-600 mb-4">{{ period_title }}</h2>
+
+<div class="overflow-x-auto bg-white shadow rounded-lg">
+<table class="min-w-full text-sm">
+    <thead>
+        <tr class="bg-slate-100 text-left">
+            <th class="px-3 py-2 whitespace-nowrap">Категория</th>
+            {% for col in columns %}
+            <th class="px-3 py-2 text-center whitespace-nowrap">
+                {% if col.nav_url %}<a href="{{ col.nav_url }}" class="text-emerald-700 hover:underline">{{ col.label }}</a>{% else %}{{ col.label }}{% endif %}
+            </th>
+            {% endfor %}
+            <th class="px-3 py-2 text-right whitespace-nowrap">
+                {% if home_url %}<a href="{{ home_url }}" class="text-violet-700 hover:underline">🏠 Домой</a>{% else %}TOTAL{% endif %}
+            </th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for cat in categories %}
+        <tr class="bg-emerald-800 text-white font-bold">
+            <td class="px-3 py-2 whitespace-nowrap">
+                {% if cat.directions %}
+                <button type="button" class="cursor-pointer select-none" data-expanded="false" onclick="toggleIncomeCat(this, {{ forloop.counter0 }})">
+                    <span class="arrow">▸</span> {{ cat.category }}
+                </button>
+                {% else %}
+                {{ cat.category }}
+                {% endif %}
+            </td>
+            {% for cell in cat.cells %}
+            <td class="px-1 py-1 text-right">
+                <button type="button" class="w-full px-2 py-1 rounded {% if not cell.value %}text-emerald-300{% endif %} hover:bg-emerald-700 tabular-nums"
+                    hx-get="{% url 'income_ops' %}?category={{ cat.category|urlencode }}&start={{ cell.start }}&end={{ cell.end }}"
+                    hx-target="#ops-panel" hx-swap="innerHTML">{{ cell.value|money }}</button>
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums">{{ cat.total|money0 }}</td>
+        </tr>
+        {% for dir in cat.directions %}
+        <tr class="inc-dirrow-{{ forloop.parentloop.counter0 }} hidden border-t bg-emerald-50">
+            <td class="px-3 py-2 whitespace-nowrap text-gray-600">↳ {{ dir.direction|default:"(без направления)" }}</td>
+            {% for cell in dir.cells %}
+            <td class="px-1 py-1 text-right">
+                <button type="button" class="w-full px-2 py-1 rounded {% if not cell.value %}text-gray-300{% endif %} hover:bg-emerald-100 tabular-nums"
+                    hx-get="{% url 'income_ops' %}?category={{ cat.category|urlencode }}&has_direction=1&direction={{ dir.direction|urlencode }}&start={{ cell.start }}&end={{ cell.end }}"
+                    hx-target="#ops-panel" hx-swap="innerHTML">{{ cell.value|money }}</button>
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums bg-gray-100">{{ dir.total|money0 }}</td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+        <tr class="border-t bg-slate-200 font-bold">
+            <td class="px-3 py-2">ИТОГО</td>
+            {% for total in col_totals %}<td class="px-3 py-2 text-right tabular-nums">{{ total|money0 }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums">{{ grand_total|money0 }}</td>
+        </tr>
+    </tbody>
+</table>
+</div>
+
+<div id="ops-panel" class="mt-6"></div>
+
+<script>
+function toggleIncomeCat(btn, idx) {
+    const expanded = btn.dataset.expanded === 'true';
+    document.querySelectorAll('.inc-dirrow-' + idx).forEach(el => el.classList.toggle('hidden', expanded));
+    btn.dataset.expanded = expanded ? 'false' : 'true';
+    btn.querySelector('.arrow').textContent = expanded ? '▸' : '▾';
+}
+</script>
+{% endblock %}

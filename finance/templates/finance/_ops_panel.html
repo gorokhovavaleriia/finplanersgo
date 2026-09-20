@@ -1,0 +1,43 @@
+{% load finance_extras %}
+<div class="bg-white shadow rounded-lg p-4">
+    {% if kind == "income" %}
+    <h3 class="font-semibold mb-2">
+        {% if all_categories %}Все категории{% else %}{{ category }}{% endif %}{% if direction %} / {{ direction }}{% endif %}
+        <span class="text-gray-400 font-normal text-sm">{{ start }} – {{ end }}</span>
+    </h3>
+    {% else %}
+    <h3 class="font-semibold mb-2">
+        {% if all_groups %}Все фонды{% else %}{{ group }}{% endif %} / {% if all_categories %}все статьи{% else %}{{ category }}{% endif %}{% if direction %} / {{ direction }}{% endif %}
+        <span class="text-gray-400 font-normal text-sm">{{ start }} – {{ end }}</span>
+    </h3>
+    {% endif %}
+
+    {% if not ops %}
+    <p class="text-gray-500 text-sm">Нет операций для этого выбора.</p>
+    {% else %}
+    <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+        <thead>
+            <tr class="text-left text-gray-500">
+                <th class="px-2 py-1">Дата</th>
+                <th class="px-2 py-1 text-right">Сумма</th>
+                <th class="px-2 py-1">Статья</th>
+                <th class="px-2 py-1">Направление</th>
+                <th class="px-2 py-1">Описание</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for op in ops %}
+            <tr class="border-t">
+                <td class="px-2 py-1 whitespace-nowrap">{{ op.date }}</td>
+                <td class="px-2 py-1 text-right tabular-nums">{{ op.amount|money0 }}</td>
+                <td class="px-2 py-1">{{ op.statya }}</td>
+                <td class="px-2 py-1">{{ op.direction }}</td>
+                <td class="px-2 py-1 text-gray-500">{{ op.description|truncatechars:80 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+</div>

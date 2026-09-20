@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+staticfiles/
+
+# Секреты и локальная база — никогда не в git
+db.sqlite3
+finance/data/secret.rtf
+.env
+
+# Бэкапы, которые я делал перед рискованными правками operation_map.xlsx —
+# полезны локально, не нужны в истории репозитория
+finance/data/*.bak-*
+
+.DS_Store

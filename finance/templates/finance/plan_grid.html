@@ -1,0 +1,762 @@
+{% extends "finance/base.html" %}
+{% load finance_extras %}
+{% block title %}План — kiwi{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-1">
+    <div>
+        <h1 class="text-2xl font-bold mb-1">📋 План</h1>
+        <h2 class="text-lg text-gray-600">{{ period_title }}</h2>
+    </div>
+    <div class="flex items-center gap-4">
+        <label class="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
+            <input type="checkbox" id="plan-show-plan" checked> План
+        </label>
+        <label class="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
+            <input type="checkbox" id="plan-show-fact" checked> Факт
+        </label>
+        <button type="button" id="plan-edit-mode-btn" class="bg-slate-800 text-white rounded px-4 py-2 text-sm hover:bg-slate-700">
+            ✏️ Режим редактирования
+        </button>
+    </div>
+</div>
+<p class="text-sm text-gray-500 mb-4">
+    Факт красится зелёным, если план на этот (уже закончившийся) период выполнен — поступления получены не меньше плана,
+    расходы не превысили план; красным — если не выполнен. Красится только с 30.08.2026 и только для уже прошедших периодов.
+    {% if kind == "month" %}Недельный план правится прямо здесь — по столбцам-неделям.{% endif %}
+    {% if kind == "week" %}
+    Дневной план правится по дням. «Текущий план» / «Отредактированный» — переключатель решает, оставить недельный план как был
+    (правите/смотрите отдельные дни, не трогая неделю), или поднять новую сумму (сумму дней) в недельный план.
+    {% endif %}
+    Если правите направления — сумма направлений автоматически становится планом категории целиком.
+    По умолчанию — режим просмотра (план и факт видно, но не редактируется); «Режим редактирования» скрывает факт и открывает правку плана.
+</p>
+
+<style>
+    #plan-table-wrapper.hide-plan-rows [data-plankind="plan"] { display: none; }
+    #plan-table-wrapper.hide-fact-rows [data-plankind="fact"] { display: none; }
+    #plan-table-wrapper:not(.plan-edit-mode) input.plan-cell {
+        pointer-events: none;
+        background: transparent;
+        /* border-width: 0, не border-color: transparent — рамка (даже
+           невидимая) всё равно съедает 1px ширины у инпута, из-за чего
+           цифры "План" (внутри инпута) и "Факт" (просто в <td>, без рамки)
+           сидят на разных x — по всей таблице сразу видно, глаза устают.
+           Без рамки инпут и td дают одинаковый правый отступ: у инпута
+           td.px-1 (4px) + input.px-2 (8px) = 12px, у факта td.px-3 = 12px. */
+        border-width: 0;
+    }
+</style>
+
+<form method="post" action="{{ save_url }}" id="plan-form" data-year="{{ year }}" data-save-field-url="{% url 'plan_save_field' %}">
+{% csrf_token %}
+<input type="hidden" name="next" value="{{ request.path }}">
+
+<div id="plan-table-wrapper" class="overflow-auto max-h-[80vh] bg-white shadow rounded-lg">
+<table class="min-w-full text-sm">
+    <thead>
+        <tr class="bg-slate-100 text-left">
+            <th class="sticky top-0 z-10 bg-slate-100 px-3 py-2 whitespace-nowrap">Статья</th>
+            <th class="sticky top-0 z-10 bg-slate-100 px-3 py-2 whitespace-nowrap"></th>
+            {% for col in columns %}
+            <th class="sticky top-0 z-10 bg-slate-100 px-3 py-2 text-center whitespace-nowrap">
+                {% if col.nav_url %}<a href="{{ col.nav_url }}" class="text-sky-800 hover:underline">{{ col.label }}</a>{% else %}{{ col.label }}{% endif %}
+            </th>
+            {% endfor %}
+            {% if kind == "year" %}
+            <th class="sticky top-0 z-10 bg-slate-100 px-3 py-2 text-right whitespace-nowrap">
+                {% if home_url %}<a href="{{ home_url }}" class="text-violet-700 hover:underline">🏠 Домой</a>{% else %}TOTAL{% endif %}
+            </th>
+            {% else %}
+            <th class="sticky top-0 z-10 bg-slate-100 px-3 py-2 text-right whitespace-nowrap">Текущий план</th>
+            <th class="sticky top-0 z-10 bg-slate-100 px-3 py-2 text-right whitespace-nowrap">Отредактированный</th>
+            <th class="sticky top-0 z-10 bg-slate-100 px-3 py-2 text-right whitespace-nowrap">
+                <a href="{{ home_url }}" class="text-violet-700 hover:underline">🏠 Домой</a>
+            </th>
+            {% endif %}
+        </tr>
+    </thead>
+    <tbody>
+        <tr class="bg-sky-900 text-white font-bold" data-plankind="fact">
+            <td class="px-3 py-2" colspan="2">Поступления (факт)</td>
+            {% zip3 income_values grand_income_ok columns as income_fact_cols %}
+            {% for v, ok, col in income_fact_cols %}
+            <td class="px-1 py-1 text-right">
+                <button type="button" class="w-full px-2 py-1 rounded hover:bg-sky-800 tabular-nums {% if ok == True %}text-emerald-300{% elif ok == False %}text-rose-300{% endif %}"
+                    hx-get="{% url 'income_ops' %}?start={{ col.start }}&end={{ col.end }}"
+                    hx-target="#ops-panel" hx-swap="innerHTML">{{ v|money }}</button>
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ income_total|money0 }}</td>
+        </tr>
+        <tr class="bg-sky-800 text-white font-bold cursor-pointer select-none" data-expanded="false" data-plankind="plan"
+            data-toggle="income-section" data-key="income-section" onclick="toggleIncomePlanSection(this)">
+            <td class="px-3 py-2" colspan="2"><span class="arrow">▸</span> Плановые поступления</td>
+            {% for v in planned_income_values %}<td class="px-3 py-2 text-right tabular-nums">{{ v|money }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ planned_income_total|money0 }}</td>
+        </tr>
+        {% for row in income_plan_table %}
+        <tr class="income-plan-row income-plan-top hidden border-t">
+            <td class="px-3 py-2 whitespace-nowrap">
+                {% if row.directions %}
+                <button type="button" class="hover:underline" data-toggle="inccat" data-idx="{{ forloop.counter0 }}"
+                        data-key="inccat:{{ row.category }}" onclick="toggleIncomePlanCat(this, {{ forloop.counter0 }})">▸ {{ row.category }}</button>
+                {% else %}
+                {{ row.category }}
+                {% endif %}
+            </td>
+            <td class="px-3 py-2 text-center">
+                {% if not row.expandable and row.daily_split %}
+                <input type="checkbox" name="{{ row.weekend_field_name }}" {% if row.works_weekends %}checked{% endif %}>
+                {% endif %}
+            </td>
+            {% if kind == "year" %}
+            {% for cell in row.cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums">
+                {% else %}
+                <div class="px-2 py-1 text-right tabular-nums text-gray-400 italic">{{ cell.value|money0 }}</div>
+                {% endif %}
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums bg-emerald-50">{{ row.total|money0 }}</td>
+            {% else %}
+            {% for cell in row.cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums">
+                {% elif cell.value is not None %}
+                <div class="px-2 py-1 text-right tabular-nums text-gray-400 italic">{{ cell.value|money0 }}</div>
+                {% endif %}
+            </td>
+            {% endfor %}
+            {% if row.expandable %}
+            <td colspan="2" class="px-3 py-2 text-right tabular-nums text-gray-400 italic bg-emerald-50" title="Сумма направлений — вводится по направлениям, не общей цифрой">Σ {{ row.current_total|money0 }}</td>
+            {% elif row.daily_split %}
+            {% include "finance/_income_plan_totals.html" with obj=row %}
+            {% else %}
+            <td colspan="2" class="px-3 py-2 text-right tabular-nums text-gray-400 italic bg-emerald-50" title="План по дням не ведётся для этой категории — редактируется в месячном/годовом виде">{{ row.current_total|money0 }}</td>
+            {% endif %}
+            <td></td>
+            {% endif %}
+        </tr>
+
+        {% for dir in row.directions %}
+        <tr class="income-plan-row income-plan-dirrow-{{ forloop.parentloop.counter0 }} hidden border-t bg-emerald-50">
+            <td class="px-3 py-2 whitespace-nowrap text-gray-600">↳ {{ dir.direction|default:"(без направления)" }}</td>
+            <td class="px-3 py-2 text-center">
+                {% if dir.daily_split %}
+                <input type="checkbox" name="{{ dir.weekend_field_name }}" {% if dir.works_weekends %}checked{% endif %}>
+                {% endif %}
+            </td>
+            {% if kind == "year" %}
+            {% for cell in dir.cells %}
+            <td class="px-1 py-1">
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums">
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums bg-emerald-100">{{ dir.total|money0 }}</td>
+            {% else %}
+            {% for cell in dir.cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums">
+                {% endif %}
+            </td>
+            {% endfor %}
+            {% if dir.daily_split %}
+            {% include "finance/_income_plan_totals.html" with obj=dir %}
+            {% else %}
+            <td colspan="2" class="px-3 py-2 text-right tabular-nums text-gray-400 italic bg-emerald-100" title="План по дням не ведётся для этого направления — редактируется в месячном/годовом виде">{{ dir.current_total|money0 }}</td>
+            {% endif %}
+            <td></td>
+            {% endif %}
+        </tr>
+        {% endfor %}
+        {% endfor %}
+        <tr class="income-plan-row income-plan-top hidden border-t bg-slate-200 font-bold">
+            <td class="px-3 py-2" colspan="2">ИТОГО (поступления)</td>
+            {% for total in income_plan_col_totals %}<td class="px-3 py-2 text-right tabular-nums">{{ total|money0 }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ income_plan_grand_total|money0 }}</td>
+        </tr>
+
+        <tr class="bg-sky-900 text-white font-bold" data-plankind="plan">
+            <td class="px-3 py-2" colspan="2">План расходы (всего)</td>
+            {% if grand_plan %}
+            {% for v in grand_plan %}<td class="px-3 py-2 text-right tabular-nums">{{ v|money }}</td>{% endfor %}
+            {% else %}
+            <td colspan="{{ columns|length }}"></td>
+            {% endif %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ grand_plan_total|money0 }}</td>
+        </tr>
+        <tr class="bg-sky-900 text-white font-bold" data-plankind="fact">
+            <td class="px-3 py-2" colspan="2">Факт расходы (всего)</td>
+            {% zip3 grand_fact grand_fact_ok columns as grand_fact_cols %}
+            {% for v, ok, col in grand_fact_cols %}
+            <td class="px-1 py-1 text-right">
+                <button type="button" class="w-full px-2 py-1 rounded hover:bg-sky-800 tabular-nums {% if ok == True %}text-emerald-300{% elif ok == False %}text-rose-300{% endif %}"
+                    hx-get="{% url 'expenses_ops' %}?start={{ col.start }}&end={{ col.end }}"
+                    hx-target="#ops-panel" hx-swap="innerHTML">{{ v|money }}</button>
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ grand_fact_total|money0 }}</td>
+        </tr>
+        <tr class="bg-sky-900 text-white font-bold" data-plankind="fact">
+            <td class="px-3 py-2">Остаток</td>
+            <td class="px-3 py-2 text-right tabular-nums text-sky-300">{{ grand_balance_start|money }}</td>
+            {% for v in grand_balance_row %}<td class="px-3 py-2 text-right tabular-nums {% if v.partial %}text-slate-400{% endif %}">{{ v.value|money }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums {% if grand_balance_total.partial %}text-slate-400{% endif %}" colspan="{% if kind != 'year' %}3{% endif %}">{{ grand_balance_total.value|money }}</td>
+        </tr>
+        <tr class="bg-sky-800 text-white" data-plankind="plan">
+            <td class="px-3 py-2">Плановый остаток</td>
+            <td class="px-3 py-2 text-right tabular-nums text-sky-300">{{ grand_planned_balance_start|money }}</td>
+            {% for v in grand_planned_balance_row %}<td class="px-3 py-2 text-right tabular-nums">{{ v|money }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ grand_planned_balance_total|money }}</td>
+        </tr>
+
+        {% for group in groups %}
+        <tr class="bg-amber-900 text-white font-bold">
+            <td class="px-3 py-2" colspan="2">{{ group.name }} <span class="font-normal text-amber-300">{{ group.income_share_pct|floatformat:2 }}%</span></td>
+            {% if kind != "year" %}
+            <td colspan="{{ columns|length|add:3 }}"></td>
+            {% else %}
+            <td colspan="{{ columns|length|add:1 }}"></td>
+            {% endif %}
+        </tr>
+        <tr class="bg-amber-800 text-white" data-plankind="plan">
+            <td class="px-3 py-2" colspan="2">План поступления</td>
+            {% for v in group.planned_income_row %}<td class="px-3 py-2 text-right tabular-nums">{{ v|money }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ group.planned_income_total|money0 }}</td>
+        </tr>
+        <tr class="bg-amber-800 text-white" data-plankind="fact">
+            <td class="px-3 py-2" colspan="2">Факт поступления</td>
+            {% for v, ok in group.income_row|zip_lists:group.income_ok %}
+            <td class="px-3 py-2 text-right tabular-nums {% if ok == True %}text-emerald-300{% elif ok == False %}text-rose-300{% endif %}">{{ v|money }}</td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ group.income_total|money0 }}</td>
+        </tr>
+        <tr class="bg-amber-700 text-white font-bold cursor-pointer select-none" data-expanded="true" data-plankind="plan"
+            data-toggle="group" data-group-idx="{{ forloop.counter0 }}" data-key="fund:{{ group.name }}"
+            onclick="toggleGroup(this, {{ forloop.counter0 }})">
+            <td class="px-3 py-2" colspan="2"><span class="arrow">▾</span> План расходы</td>
+            {% if group.plan_row %}
+            {% for v in group.plan_row %}<td class="px-3 py-2 text-right tabular-nums">{{ v|money }}</td>{% endfor %}
+            {% else %}
+            <td colspan="{{ columns|length }}"></td>
+            {% endif %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ group.plan_total|money0 }}</td>
+        </tr>
+
+        {% for row in group.rows %}
+        <tr class="plan-cat-{{ forloop.parentloop.counter0 }} border-t" data-plankind="plan">
+            <td class="px-3 py-2 whitespace-nowrap">
+                {% if row.expandable %}
+                <button type="button" class="hover:underline" data-toggle="direction"
+                        data-group-idx="{{ forloop.parentloop.counter0 }}" data-row-idx="{{ forloop.counter0 }}"
+                        data-key="cat:{{ group.name }}::{{ row.category }}"
+                        onclick="toggleDirection(this, {{ forloop.parentloop.counter0 }}, {{ forloop.counter0 }})">▸ {{ row.category }}</button>
+                {% else %}
+                {{ row.category }}
+                {% endif %}
+            </td>
+            <td class="px-3 py-2 text-xs text-gray-400">План</td>
+            {% if kind == "year" %}
+            {% for cell in row.plan_edit_cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell plan-cascade-input w-full border rounded px-2 py-1 text-right tabular-nums"
+                       data-has-lower="{{ cell.has_lower|yesno:'true,false' }}" data-cascade-label="неделям месяца">
+                {% else %}
+                <div class="px-2 py-1 text-right tabular-nums text-gray-400 italic" data-locked-value="{{ cell.value|rawnum }}" data-field="{{ cell.field_name }}" title="Сумма направлений — вводится по направлениям, не общей цифрой">{{ cell.value|money0 }}</div>
+                {% endif %}
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums bg-gray-100"><span class="edited-total">{{ row.plan_total|money0 }}</span></td>
+            {% elif kind == "month" %}
+            {% for cell in row.plan_edit_cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell plan-cascade-input w-full border rounded px-2 py-1 text-right tabular-nums"
+                       data-has-lower="{{ cell.has_lower|yesno:'true,false' }}" data-cascade-label="дням недели">
+                {% else %}
+                <div class="px-2 py-1 text-right tabular-nums text-gray-400 italic" data-locked-value="{{ cell.value|rawnum }}" data-field="{{ cell.field_name }}" title="Сумма направлений — вводится по направлениям, не общей цифрой">{{ cell.value|money0 }}</div>
+                {% endif %}
+            </td>
+            {% endfor %}
+            {% include "finance/_plan_totals_display.html" with obj=row %}
+            <td></td>
+            {% else %}
+            {% for cell in row.day_cells %}
+            <td class="px-1 py-1">
+                {% if cell.editable %}
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums">
+                {% else %}
+                <div class="px-2 py-1 text-right tabular-nums text-gray-400 italic" data-locked-value="{{ cell.value|rawnum }}" data-field="{{ cell.field_name }}" title="Сумма направлений — вводится по направлениям, не общей цифрой">{{ cell.value|money0 }}</div>
+                {% endif %}
+            </td>
+            {% endfor %}
+            {% include "finance/_plan_totals_display.html" with obj=row %}
+            <td></td>
+            {% endif %}
+        </tr>
+        <tr class="plan-cat-{{ forloop.parentloop.counter0 }} border-t bg-gray-50" data-plankind="fact">
+            <td class="px-3 py-2 whitespace-nowrap">{{ row.category }}</td>
+            <td class="px-3 py-2 text-xs text-gray-400">Факт</td>
+            {% zip3 row.fact_cells row.fact_ok columns as row_fact_cols %}
+            {% for v, ok, col in row_fact_cols %}
+            <td class="px-1 py-1 text-right">
+                <button type="button" class="w-full px-2 py-1 rounded hover:bg-gray-200 tabular-nums {% if ok == True %}text-emerald-600{% elif ok == False %}text-rose-600{% endif %}"
+                    hx-get="{% url 'expenses_ops' %}?group={{ group.name|urlencode }}&category={{ row.category|urlencode }}&start={{ col.start }}&end={{ col.end }}"
+                    hx-target="#ops-panel" hx-swap="innerHTML">{{ v|money }}</button>
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums bg-gray-100" colspan="{% if kind != 'year' %}3{% endif %}">{{ row.fact_total|money0 }}</td>
+        </tr>
+
+        {% for dir in row.directions %}
+        <tr class="plan-dirrow-{{ forloop.parentloop.parentloop.counter0 }} plan-dirrow-{{ forloop.parentloop.parentloop.counter0 }}-{{ forloop.parentloop.counter0 }} hidden border-t bg-amber-50" data-plankind="plan">
+            <td class="px-3 py-2 whitespace-nowrap text-gray-600">↳ {{ dir.direction|default:"(без направления)" }}</td>
+            <td class="px-3 py-2 text-xs text-gray-400">План</td>
+            {% if kind == "year" %}
+            {% for cell in dir.plan_edit_cells %}
+            <td class="px-1 py-1">
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell plan-cascade-input w-full border rounded px-2 py-1 text-right tabular-nums"
+                       data-has-lower="{{ cell.has_lower|yesno:'true,false' }}" data-cascade-label="неделям месяца">
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums bg-gray-100"><span class="edited-total">{{ dir.plan_total|money0 }}</span></td>
+            {% elif kind == "month" %}
+            {% for cell in dir.plan_edit_cells %}
+            <td class="px-1 py-1">
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell plan-cascade-input w-full border rounded px-2 py-1 text-right tabular-nums"
+                       data-has-lower="{{ cell.has_lower|yesno:'true,false' }}" data-cascade-label="дням недели">
+            </td>
+            {% endfor %}
+            {% include "finance/_plan_totals_display.html" with obj=dir %}
+            <td></td>
+            {% else %}
+            {% for cell in dir.day_cells %}
+            <td class="px-1 py-1">
+                <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums">
+            </td>
+            {% endfor %}
+            {% include "finance/_plan_totals_display.html" with obj=dir %}
+            <td></td>
+            {% endif %}
+        </tr>
+        <tr class="plan-dirrow-{{ forloop.parentloop.parentloop.counter0 }} plan-dirrow-{{ forloop.parentloop.parentloop.counter0 }}-{{ forloop.parentloop.counter0 }} hidden border-t bg-amber-50" data-plankind="fact">
+            <td class="px-3 py-2 whitespace-nowrap text-gray-600">↳ {{ dir.direction|default:"(без направления)" }}</td>
+            <td class="px-3 py-2 text-xs text-gray-400">Факт</td>
+            {% zip3 dir.fact_cells dir.fact_ok columns as dir_fact_cols %}
+            {% for v, ok, col in dir_fact_cols %}
+            <td class="px-1 py-1 text-right">
+                <button type="button" class="w-full px-2 py-1 rounded hover:bg-amber-100 tabular-nums {% if ok == True %}text-emerald-600{% elif ok == False %}text-rose-600{% endif %}"
+                    hx-get="{% url 'expenses_ops' %}?group={{ group.name|urlencode }}&category={{ row.category|urlencode }}&has_direction=1&direction={{ dir.direction|urlencode }}&start={{ col.start }}&end={{ col.end }}"
+                    hx-target="#ops-panel" hx-swap="innerHTML">{{ v|money }}</button>
+            </td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums bg-gray-100" colspan="{% if kind != 'year' %}3{% endif %}">{{ dir.fact_total|money0 }}</td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+
+        <tr class="bg-amber-800 text-white" data-plankind="fact">
+            <td class="px-3 py-2" colspan="2">Факт расходы</td>
+            {% for v, ok in group.fact_row|zip_lists:group.fact_ok %}
+            <td class="px-3 py-2 text-right tabular-nums {% if ok == True %}text-emerald-300{% elif ok == False %}text-rose-300{% endif %}">{{ v|money }}</td>
+            {% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ group.fact_total|money0 }}</td>
+        </tr>
+        <tr class="bg-amber-800 text-white" data-plankind="plan">
+            <td class="px-3 py-2">План остаток</td>
+            <td class="px-3 py-2 text-right tabular-nums text-amber-300">{{ group.planned_balance_start|money }}</td>
+            {% for v in group.planned_balance_row %}<td class="px-3 py-2 text-right tabular-nums">{{ v|money }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ group.planned_balance_total|money }}</td>
+        </tr>
+        <tr class="bg-amber-800 text-white" data-plankind="fact">
+            <td class="px-3 py-2">Факт остаток</td>
+            <td class="px-3 py-2 text-right tabular-nums text-amber-300">{{ group.balance_start|money }}</td>
+            {% for v in group.balance_row %}<td class="px-3 py-2 text-right tabular-nums {% if v.partial %}text-slate-300{% endif %}">{{ v.value|money }}</td>{% endfor %}
+            <td class="px-3 py-2 text-right tabular-nums {% if group.balance_total.partial %}text-slate-300{% endif %}" colspan="{% if kind != 'year' %}3{% endif %}">{{ group.balance_total.value|money }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<p class="text-sm text-gray-500 mt-3">Если разворачиваете категорию по направлениям и заполняете план там — итог по категории пересчитается как сумма направлений.</p>
+<button type="submit" class="mt-2 bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">💾 Сохранить план</button>
+</form>
+
+<div id="ops-panel" class="mt-6"></div>
+
+<script>
+// Развёрнутость групп/категорий запоминается в localStorage, чтобы не
+// схлопывалось при переходе между годом/месяцем/неделей (это отдельные
+// страницы — каждая рендерится заново, JS-переменные не переживают переход).
+// Ключ хранит явное состояние (true/false) только для того, что пользователь
+// хоть раз трогал руками; всё остальное остаётся на серверном значении по
+// умолчанию (фонды — развёрнуты, направления/поступления — свёрнуты).
+const PLAN_EXPANDED_STORAGE_KEY = 'kiwi:plan:expanded';
+
+function _planExpandedMap() {
+    try {
+        return JSON.parse(localStorage.getItem(PLAN_EXPANDED_STORAGE_KEY) || '{}');
+    } catch (e) {
+        return {};
+    }
+}
+
+function _planSetExpanded(key, expanded) {
+    if (!key) return;
+    try {
+        const map = _planExpandedMap();
+        map[key] = expanded;
+        localStorage.setItem(PLAN_EXPANDED_STORAGE_KEY, JSON.stringify(map));
+    } catch (e) {}
+}
+
+function _planGetSavedExpanded(key) {
+    const map = _planExpandedMap();
+    return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : null;
+}
+
+function _applyGroupState(btn, groupIdx, expanded) {
+    const catRows = document.querySelectorAll('.plan-cat-' + groupIdx);
+    const dirRows = document.querySelectorAll('.plan-dirrow-' + groupIdx);
+    if (expanded) {
+        catRows.forEach(el => el.classList.remove('hidden'));
+        btn.dataset.expanded = 'true';
+        btn.querySelector('.arrow').textContent = '▾';
+    } else {
+        catRows.forEach(el => el.classList.add('hidden'));
+        dirRows.forEach(el => el.classList.add('hidden'));
+        btn.dataset.expanded = 'false';
+        btn.querySelector('.arrow').textContent = '▸';
+    }
+}
+
+function toggleGroup(btn, groupIdx) {
+    const expanded = btn.dataset.expanded !== 'false';
+    const newState = !expanded;
+    _applyGroupState(btn, groupIdx, newState);
+    _planSetExpanded(btn.dataset.key, newState);
+}
+
+function _applyDirectionState(btn, groupIdx, rowIdx, expanded) {
+    document.querySelectorAll('.plan-dirrow-' + groupIdx + '-' + rowIdx).forEach(el => el.classList.toggle('hidden', !expanded));
+    btn.dataset.expanded = expanded ? 'true' : 'false';
+}
+
+function toggleDirection(btn, groupIdx, rowIdx) {
+    const expanded = btn.dataset.expanded === 'true';
+    const newState = !expanded;
+    _applyDirectionState(btn, groupIdx, rowIdx, newState);
+    _planSetExpanded(btn.dataset.key, newState);
+}
+
+function _applyIncomePlanSectionState(btn, expanded) {
+    document.querySelectorAll('.income-plan-row').forEach(el => el.classList.add('hidden'));
+    if (expanded) {
+        document.querySelectorAll('.income-plan-top').forEach(el => el.classList.remove('hidden'));
+    }
+    btn.dataset.expanded = expanded ? 'true' : 'false';
+    btn.querySelector('.arrow').textContent = expanded ? '▾' : '▸';
+}
+
+function toggleIncomePlanSection(btn) {
+    const expanded = btn.dataset.expanded === 'true';
+    const newState = !expanded;
+    _applyIncomePlanSectionState(btn, newState);
+    _planSetExpanded(btn.dataset.key, newState);
+}
+
+function _applyIncomePlanCatState(btn, idx, expanded) {
+    document.querySelectorAll('.income-plan-dirrow-' + idx).forEach(el => el.classList.toggle('hidden', !expanded));
+    btn.dataset.expanded = expanded ? 'true' : 'false';
+    btn.querySelector('.arrow').textContent = expanded ? '▾' : '▸';
+}
+
+function toggleIncomePlanCat(btn, idx) {
+    const expanded = btn.dataset.expanded === 'true';
+    const newState = !expanded;
+    _applyIncomePlanCatState(btn, idx, newState);
+    _planSetExpanded(btn.dataset.key, newState);
+}
+
+function initPlanExpandedState() {
+    // 1) фонды — по умолчанию развёрнуты, схлопываем только явно сохранённые как свёрнутые
+    document.querySelectorAll('[data-toggle="group"]').forEach(function (btn) {
+        const saved = _planGetSavedExpanded(btn.dataset.key);
+        if (saved !== null && saved !== true) {
+            _applyGroupState(btn, btn.dataset.groupIdx, saved);
+        }
+    });
+    // 2) направления внутри категорий — по умолчанию свёрнуты; разворачиваем
+    // только если сама строка категории сейчас видна (иначе фонд схлопнут,
+    // и раскрывать направление под ним бессмысленно — сорвёт разметку)
+    document.querySelectorAll('[data-toggle="direction"]').forEach(function (btn) {
+        const tr = btn.closest('tr');
+        if (tr && tr.classList.contains('hidden')) return;
+        const saved = _planGetSavedExpanded(btn.dataset.key);
+        if (saved === true) {
+            _applyDirectionState(btn, btn.dataset.groupIdx, btn.dataset.rowIdx, true);
+        }
+    });
+    // 3) "Плановые поступления"
+    document.querySelectorAll('[data-toggle="income-section"]').forEach(function (btn) {
+        const saved = _planGetSavedExpanded(btn.dataset.key);
+        if (saved === true) {
+            _applyIncomePlanSectionState(btn, true);
+        }
+    });
+    // 4) категории поступлений — тот же принцип, что и п.2
+    document.querySelectorAll('[data-toggle="inccat"]').forEach(function (btn) {
+        const tr = btn.closest('tr');
+        if (tr && tr.classList.contains('hidden')) return;
+        const saved = _planGetSavedExpanded(btn.dataset.key);
+        if (saved === true) {
+            _applyIncomePlanCatState(btn, btn.dataset.idx, true);
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', initPlanExpandedState);
+
+function parseMoneyInput(s) {
+    return parseFloat((s || '0').replace(/\s| /g, '').replace(',', '.')) || 0;
+}
+
+function recalcEditedTotal(tr) {
+    const span = tr.querySelector('.edited-total');
+    if (!span) return;
+    let total = 0;
+    // редактируемые ячейки — как обычно; ячейки, заблокированные суммой
+    // направлений (у них нет своего input), тоже входят в итог по строке
+    tr.querySelectorAll('input.plan-cell').forEach(inp => { total += parseMoneyInput(inp.value); });
+    tr.querySelectorAll('[data-locked-value]').forEach(el => { total += parseMoneyInput(el.dataset.lockedValue); });
+    span.textContent = Math.round(total).toLocaleString('ru-RU');
+}
+
+document.addEventListener('input', function (e) {
+    if (e.target.matches('input.plan-cell')) {
+        recalcEditedTotal(e.target.closest('tr'));
+    }
+});
+
+// Правка сверху (месяц -> недели, неделя -> дни) молча перезаписывает
+// нижний уровень — если там уже есть свои данные, сначала спрашиваем на
+// клиенте (см. PLAN.md, "новая логика планирования расходов", п.5-6).
+// Если отказались — откатываем поле к исходному значению: и при обычной
+// отправке формы (сервер увидит "без изменений" и ничего не тронет), и при
+// мгновенном сохранении одной ячейки (запрос тогда просто не уйдёт).
+function confirmCascadeIfNeeded(inp) {
+    if (inp.value === inp.defaultValue) return true;
+    if (inp.classList.contains('plan-cascade-input') && inp.dataset.hasLower === 'true') {
+        const label = inp.dataset.cascadeLabel || 'нижнему уровню';
+        const ok = window.confirm('По ' + label + ' уже есть свои данные. Обновить план и пересчитать их по новой сумме?');
+        if (!ok) {
+            inp.value = inp.defaultValue;
+            recalcEditedTotal(inp.closest('tr'));
+            return false;
+        }
+    }
+    return true;
+}
+
+const planForm = document.getElementById('plan-form');
+if (planForm) {
+    planForm.addEventListener('submit', function () {
+        document.querySelectorAll('input.plan-cascade-input[data-has-lower="true"]').forEach(confirmCascadeIfNeeded);
+    });
+}
+
+// Мгновенное сохранение расходной ячейки при уходе с поля (blur) — без
+// перезагрузки страницы. Кнопка "Сохранить план" никуда не делась и
+// по-прежнему сохраняет всё разом (чекбоксы "без выходных", план
+// поступлений) — это просто более быстрый путь для отдельной цифры.
+function syncCurrentTotal(tr) {
+    const currentCell = tr.querySelector('.current-total');
+    const editedSpan = tr.querySelector('.edited-total');
+    if (currentCell && editedSpan) {
+        currentCell.textContent = editedSpan.textContent;
+    }
+}
+
+// Ячейка категории целиком блокируется/разблокируется ПОКОЛОНОЧНО, как
+// только у направлений появляется/пропадает своя сумма за этот же
+// период (месяц/неделя/день) — см. plan_save_field и _plan_context в
+// views.py. Раньше это было видно только после перезагрузки страницы;
+// теперь — сразу по blur того поля направления, без перезагрузки.
+const PLAN_FIELD_SEP = '␟';
+
+function formatMoney0(value) {
+    return Math.round(value || 0).toLocaleString('ru-RU');
+}
+
+function planFieldParts(name) {
+    const parts = (name || '').split(PLAN_FIELD_SEP);
+    return parts.length === 6 ? parts : null;
+}
+
+// Сумма ВСЕХ направлений по тому же полю (группа/категория/подкатегория/
+// период), кроме самой ячейки категории (у неё направление пустое) —
+// берётся прямо из DOM, поэтому уже учитывает только что сохранённое
+// значение того поля, с которого ушёл фокус.
+function siblingDirectionSum(directionFieldName) {
+    const parts = planFieldParts(directionFieldName);
+    if (!parts) return null;
+    const [kind, group, category, subcategory, , period] = parts;
+    let sum = 0;
+    document.querySelectorAll('input.plan-cell').forEach(function (el) {
+        const p = planFieldParts(el.name);
+        if (p && p[0] === kind && p[1] === group && p[2] === category && p[3] === subcategory && p[5] === period && p[4] !== '') {
+            sum += parseMoneyInput(el.value);
+        }
+    });
+    return sum;
+}
+
+function applyCategoryCellUpdate(directionFieldName, categoryCell) {
+    const parts = planFieldParts(directionFieldName);
+    if (!parts || parts[4] === '') return; // сама ячейка категории — блокировать нечего
+
+    const catFieldName = [parts[0], parts[1], parts[2], parts[3], '', parts[5]].join(PLAN_FIELD_SEP);
+    const dirSum = siblingDirectionSum(directionFieldName);
+
+    const cell = document.querySelector('input.plan-cell[name="' + CSS.escape(catFieldName) + '"]')
+        || document.querySelector('[data-field="' + CSS.escape(catFieldName) + '"]');
+    if (!cell) return;
+    const td = cell.closest('td');
+    const tr = cell.closest('tr');
+    if (!td || !tr) return;
+
+    if (dirSum) {
+        const div = document.createElement('div');
+        div.className = 'px-2 py-1 text-right tabular-nums text-gray-400 italic';
+        div.dataset.lockedValue = String(dirSum);
+        div.dataset.field = catFieldName;
+        div.title = 'Сумма направлений — вводится по направлениям, не общей цифрой';
+        div.textContent = formatMoney0(dirSum);
+        td.replaceChildren(div);
+    } else if (categoryCell) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.name = catFieldName;
+        input.value = formatMoney0(categoryCell.stored_value);
+        input.className = 'plan-cell w-full border rounded px-2 py-1 text-right tabular-nums';
+        if (categoryCell.has_lower !== null && categoryCell.has_lower !== undefined) {
+            input.classList.add('plan-cascade-input');
+            input.dataset.hasLower = categoryCell.has_lower ? 'true' : 'false';
+            input.dataset.cascadeLabel = categoryCell.cascade_label || '';
+        }
+        input.defaultValue = input.value;
+        td.replaceChildren(input);
+    }
+    recalcEditedTotal(tr);
+    syncCurrentTotal(tr);
+}
+
+async function autosavePlanField(inp) {
+    if (inp.value === inp.defaultValue) return;
+    if (!confirmCascadeIfNeeded(inp)) return;
+
+    const csrfToken = planForm.querySelector('[name=csrfmiddlewaretoken]').value;
+    const body = new URLSearchParams();
+    body.set('field', inp.name);
+    body.set('value', inp.value);
+    body.set('year', planForm.dataset.year);
+
+    inp.classList.add('opacity-50');
+    try {
+        const resp = await fetch(planForm.dataset.saveFieldUrl, {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+            body: body.toString(),
+        });
+        inp.classList.remove('opacity-50');
+        if (resp.ok) {
+            const fieldName = inp.name;
+            inp.defaultValue = inp.value;
+            syncCurrentTotal(inp.closest('tr'));
+            inp.classList.add('ring-2', 'ring-emerald-400');
+            setTimeout(() => inp.classList.remove('ring-2', 'ring-emerald-400'), 800);
+            const data = await resp.json().catch(() => null);
+            if (data && data.category_cell) {
+                applyCategoryCellUpdate(fieldName, data.category_cell);
+            }
+        } else {
+            inp.classList.add('ring-2', 'ring-rose-400');
+        }
+    } catch (e) {
+        inp.classList.remove('opacity-50');
+        inp.classList.add('ring-2', 'ring-rose-400');
+    }
+}
+
+// blur не всплывает — слушаем на фазе погружения (capture), иначе делегирование не сработает
+document.addEventListener('blur', function (e) {
+    if (e.target.matches('input[name^="planmonth␟"], input[name^="planweek␟"], input[name^="planday␟"]')) {
+        autosavePlanField(e.target);
+    }
+}, true);
+
+// Режим просмотра (по умолчанию) / режим редактирования — переключатель в
+// шапке. В режиме просмотра план и факт видны (по чекбоксам), но ничего не
+// редактируется (ячейки становятся некликабельными через CSS, см. <style>
+// выше). В режиме редактирования факт скрывается, план виден и
+// редактируется.
+(function () {
+    const wrapper = document.getElementById('plan-table-wrapper');
+    const showPlanCb = document.getElementById('plan-show-plan');
+    const showFactCb = document.getElementById('plan-show-fact');
+    const editModeBtn = document.getElementById('plan-edit-mode-btn');
+    let editMode = false;
+
+    function updateVisibility() {
+        wrapper.classList.toggle('hide-plan-rows', !showPlanCb.checked);
+        wrapper.classList.toggle('hide-fact-rows', !showFactCb.checked);
+    }
+
+    showPlanCb.addEventListener('change', updateVisibility);
+    showFactCb.addEventListener('change', updateVisibility);
+
+    function setEditMode(on) {
+        editMode = on;
+        wrapper.classList.toggle('plan-edit-mode', on);
+        showPlanCb.disabled = on;
+        showFactCb.disabled = on;
+        if (on) {
+            showPlanCb.checked = true;
+            showFactCb.checked = false;
+            editModeBtn.textContent = '👁 Режим просмотра';
+            editModeBtn.classList.add('bg-emerald-700');
+            editModeBtn.classList.remove('bg-slate-800', 'hover:bg-slate-700');
+        } else {
+            showPlanCb.checked = true;
+            showFactCb.checked = true;
+            editModeBtn.textContent = '✏️ Режим редактирования';
+            editModeBtn.classList.remove('bg-emerald-700');
+            editModeBtn.classList.add('bg-slate-800', 'hover:bg-slate-700');
+        }
+        updateVisibility();
+    }
+
+    editModeBtn.addEventListener('click', function () {
+        setEditMode(!editMode);
+    });
+
+    updateVisibility();
+})();
+</script>
+{% endblock %}

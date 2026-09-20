@@ -1,0 +1,18 @@
+{% extends "finance/base.html" %}
+{% block title %}Вход — kiwi{% endblock %}
+{% block guest_content %}
+<div class="min-h-screen flex items-center justify-center">
+    <form method="post" class="bg-white shadow rounded-lg p-8 w-80">
+        {% csrf_token %}
+        <h1 class="text-xl font-bold mb-4">kiwi</h1>
+        {% if form.errors %}
+        <p class="text-red-600 text-sm mb-3">Неверный логин или пароль.</p>
+        {% endif %}
+        <label class="block text-sm mb-1">Логин</label>
+        <input type="text" name="username" class="w-full border rounded px-3 py-2 mb-3" required>
+        <label class="block text-sm mb-1">Пароль</label>
+        <input type="password" name="password" class="w-full border rounded px-3 py-2 mb-4" required>
+        <button type="submit" class="w-full bg-slate-800 text-white rounded px-3 py-2 hover:bg-slate-700">Войти</button>
+    </form>
+</div>
+{% endblock %}
