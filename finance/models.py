@@ -232,5 +232,41 @@ class FundTransfer(models.Model):
     class Meta:
         ordering = ["-date", "-id"]
 
+
+class FundBalanceSnapshot(models.Model):
+    """Ручная точка сверки остатка фонда: "на конец дня date остаток фонда
+    fund равен amount" — начиная с этого дня фактический остаток
+    (fund_balance.actual_daily_balances) считается от этой цифры, а не по
+    накопленной сумме операций. Более ранняя история не трогается."""
+
+    date = models.DateField()
+    fund = models.CharField(max_length=255)
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "fund"]
+        constraints = [
+            models.UniqueConstraint(fields=["fund", "date"], name="unique_fund_balance_snapshot"),
+        ]
+
+
+class FundIncomeShare(models.Model):
+    """Доля фонда от поступлений за конкретный месяц — переопределяет
+    значение по умолчанию из operation_map.xlsx (лист "Фонды") только для
+    этого месяца. Хранится как доля (0..1), в форме вводится в процентах."""
+
+    year = models.IntegerField()
+    month = models.IntegerField()
+    fund = models.CharField(max_length=255)
+    share = models.DecimalField(max_digits=6, decimal_places=4)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-year", "-month", "fund"]
+        constraints = [
+            models.UniqueConstraint(fields=["fund", "year", "month"], name="unique_fund_income_share"),
+        ]
+
     def __str__(self):
         return f"{self.date} {self.from_fund} → {self.to_fund}: {self.amount}"

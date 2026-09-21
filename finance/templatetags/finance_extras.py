@@ -19,6 +19,14 @@ def money0(value):
 
 
 @register.filter
+def percent(value):
+    """Доля (0..1) -> проценты с 2 знаками, "25.00" — для FundIncomeShare.share
+    в истории на странице "Настройка остатков" (хранится долей, вводится и
+    показывается в процентах)."""
+    return f"{float(value or 0) * 100:.2f}"
+
+
+@register.filter
 def rawnum(value):
     """Число как есть, точкой в качестве разделителя дробной части, без
     локализации Django (обычный {{ value }} для float рендерится с запятой

@@ -13,7 +13,9 @@ from .fintablo import FintabloError
 from .fintablo_sync import DEFAULT_SYNC_FROM, incremental_sync_from, sync_operations
 from .forms import FundTransferForm, UploadOperationsForm
 from .logic import aggregate, expenses, operations
-from .models import ExpenseDailyPlan, ExpenseMonthlyPlan, FundTransfer, Operation, PlanEntry
+from .models import (
+    ExpenseDailyPlan, ExpenseMonthlyPlan, FundBalanceSnapshot, FundIncomeShare, FundTransfer, Operation, PlanEntry,
+)
 
 
 @permission_required("finance.add_operation", raise_exception=True)
@@ -84,12 +86,18 @@ def sync_fintablo_full(request):
     return redirect("upload")
 
 
+BALANCE_FIELD_SEP = "␟"
+
+
 @login_required
 def fund_transfers(request):
-    """Ручные перемещения денег между фондами — не доход и не расход, сам
-    факт распределения "из одного кошелька в другой" (см. FundTransfer,
-    fund_balance.load_transfer_deltas). Влияет на остаток дня перемещения и
-    на всё, что после него — см. _plan_context."""
+    """Страница "Настройка остатков" — три независимых раздела: ручные
+    перемещения денег между фондами (исходная функция страницы, см.
+    FundTransfer/fund_balance.load_transfer_deltas), точки сверки остатка
+    (FundBalanceSnapshot, см. set_fund_balance) и переопределение доли
+    поступлений по месяцам (FundIncomeShare, см. set_fund_income_share) —
+    каждый раздел сохраняется своей формой, эта функция только отдаёт GET
+    и обрабатывает POST перемещения (как и раньше)."""
     if request.method == "POST":
         form = FundTransferForm(request.POST)
         if form.is_valid():
@@ -105,7 +113,13 @@ def fund_transfers(request):
     else:
         form = FundTransferForm()
     transfers = FundTransfer.objects.all()
-    return render(request, "finance/fund_transfers.html", {"form": form, "transfers": transfers})
+    all_funds = list(fund_balance.load_all_funds().keys())
+    return render(request, "finance/fund_transfers.html", {
+        "form": form, "transfers": transfers, "all_funds": all_funds,
+        "balance_snapshots": FundBalanceSnapshot.objects.all(),
+        "income_shares": FundIncomeShare.objects.all(),
+        "distribution_start": fund_balance.DISTRIBUTION_START.isoformat(),
+    })
 
 
 @login_required
@@ -113,6 +127,99 @@ def fund_transfer_delete(request, pk):
     if request.method == "POST":
         FundTransfer.objects.filter(pk=pk).delete()
         messages.success(request, "Перемещение удалено.")
+    return redirect("fund_transfers")
+
+
+@login_required
+def set_fund_balance(request):
+    """Точка сверки остатка — "на конец даты date остаток фонда X равен
+    сумме Y" (см. finance.models.FundBalanceSnapshot). Поля не по одному, а
+    сразу на все фонды разом (balance␟<фонд>) — пустое поле у фонда просто
+    пропускается, остальные не трогает (тот же приём динамических полей по
+    списку фондов/категорий, что и в plan_save_year и т.п.)."""
+    if request.method != "POST":
+        return redirect("fund_transfers")
+
+    raw_date = request.POST.get("date", "")
+    try:
+        snapshot_date = date.fromisoformat(raw_date)
+    except ValueError:
+        messages.error(request, "Некорректная дата.")
+        return redirect("fund_transfers")
+    if snapshot_date < fund_balance.DISTRIBUTION_START:
+        messages.error(
+            request,
+            f"Остатки не считаются раньше {fund_balance.DISTRIBUTION_START:%d.%m.%Y} — точка сверки раньше этой даты не имеет смысла.",
+        )
+        return redirect("fund_transfers")
+
+    all_funds = fund_balance.load_all_funds().keys()
+    saved = 0
+    for fund in all_funds:
+        raw = request.POST.get(f"balance{BALANCE_FIELD_SEP}{fund}", "").strip()
+        if not raw:
+            continue
+        FundBalanceSnapshot.objects.update_or_create(
+            fund=fund, date=snapshot_date, defaults={"amount": _parse_money(raw)},
+        )
+        saved += 1
+    if saved:
+        messages.success(request, f"Остаток на {snapshot_date:%d.%m.%Y} сохранён для {saved} фонд(ов).")
+    else:
+        messages.error(request, "Ни для одного фонда не указана сумма.")
+    return redirect("fund_transfers")
+
+
+@login_required
+def fund_balance_snapshot_delete(request, pk):
+    if request.method == "POST":
+        FundBalanceSnapshot.objects.filter(pk=pk).delete()
+        messages.success(request, "Точка сверки удалена.")
+    return redirect("fund_transfers")
+
+
+@login_required
+def set_fund_income_share(request):
+    """Доля фонда от поступлений за конкретный месяц (см.
+    finance.models.FundIncomeShare) — вводится в процентах, хранится долей
+    (0..1). Тот же приём динамических полей на все фонды разом, что и в
+    set_fund_balance; пустое поле у фонда — этот месяц для него не трогаем,
+    остаётся действовать значение по умолчанию (см. fund_balance.resolve_share)."""
+    if request.method != "POST":
+        return redirect("fund_transfers")
+
+    raw_month = request.POST.get("month", "")
+    try:
+        year_str, month_str = raw_month.split("-")
+        year, month = int(year_str), int(month_str)
+        if not 1 <= month <= 12:
+            raise ValueError
+    except ValueError:
+        messages.error(request, "Некорректный месяц.")
+        return redirect("fund_transfers")
+
+    all_funds = fund_balance.load_all_funds().keys()
+    saved = 0
+    for fund in all_funds:
+        raw = request.POST.get(f"share{BALANCE_FIELD_SEP}{fund}", "").strip()
+        if not raw:
+            continue
+        FundIncomeShare.objects.update_or_create(
+            fund=fund, year=year, month=month, defaults={"share": _parse_money(raw) / 100},
+        )
+        saved += 1
+    if saved:
+        messages.success(request, f"Распределение поступлений на {month:02d}.{year} сохранено для {saved} фонд(ов).")
+    else:
+        messages.error(request, "Ни для одного фонда не указан процент.")
+    return redirect("fund_transfers")
+
+
+@login_required
+def fund_income_share_delete(request, pk):
+    if request.method == "POST":
+        FundIncomeShare.objects.filter(pk=pk).delete()
+        messages.success(request, "Переопределение удалено.")
     return redirect("fund_transfers")
 
 
@@ -609,6 +716,11 @@ def _plan_context(request, kind, year, month=None, week=None):
     monthly_plan_map = _load_expense_monthly_map(year)
     fund_balances = expenses.load_fund_balances()
     weekend_flags = income_plan.load_weekend_flags()
+    # Переопределения доли поступлений по месяцам и ручные точки сверки
+    # остатка — см. страницу "Настройка остатков" (fund_transfers) и
+    # fund_balance.resolve_share/load_balance_snapshots.
+    income_shares_map = fund_balance.load_income_shares()
+    balance_snapshots = fund_balance.load_balance_snapshots()
     # Один запрос на весь план поступлений вместо SELECT на каждую ячейку —
     # см. income_plan.load_weekly_plan_map, используется и в проекции
     # остатка (planned_daily_income/planned_daily_balances ниже), и во
@@ -670,12 +782,20 @@ def _plan_context(request, kind, year, month=None, week=None):
     for group, category, subcategory in rows:
         if group != current_group:
             current_group = group
-            share = fund_balances.get(group, {}).get("share", 0.0)
+            # Доля может отличаться по месяцам (см. FundIncomeShare) —
+            # поэтому считается отдельно на каждую колонку (в годовом виде
+            # колонка = месяц, в остальных — все колонки внутри одного
+            # месяца страницы). income_share_pct — одно число для заголовка,
+            # только когда оно однозначно (не в годовом виде, см. шаблон).
+            share_cols = [
+                fund_balance.resolve_share(group, start.year, start.month, fund_balances, income_shares_map)
+                for start, _end in period_ranges
+            ]
             group_ref = {
                 "name": group, "rows": [],
-                "income_row": [v * share for v in income_values],
-                "income_share_pct": share * 100,
-                "planned_income_row": [v * share for v in planned_income_values],
+                "income_row": [v * s for v, s in zip(income_values, share_cols)],
+                "income_share_pct": None if kind == "year" else (share_cols[0] * 100 if share_cols else None),
+                "planned_income_row": [v * s for v, s in zip(planned_income_values, share_cols)],
                 "plan_row": [0.0] * len(columns),
                 "fact_row": [0.0] * len(columns),
             }
@@ -834,11 +954,15 @@ def _plan_context(request, kind, year, month=None, week=None):
     existing_names = {g["name"] for g in groups}
     for fund_name, info in fund_balances.items():
         if fund_name not in existing_names:
+            share_cols = [
+                fund_balance.resolve_share(fund_name, start.year, start.month, fund_balances, income_shares_map)
+                for start, _end in period_ranges
+            ]
             groups.append({
                 "name": fund_name, "rows": [],
-                "income_row": [v * info["share"] for v in income_values],
-                "income_share_pct": info["share"] * 100,
-                "planned_income_row": [v * info["share"] for v in planned_income_values],
+                "income_row": [v * s for v, s in zip(income_values, share_cols)],
+                "income_share_pct": None if kind == "year" else (share_cols[0] * 100 if share_cols else None),
+                "planned_income_row": [v * s for v, s in zip(planned_income_values, share_cols)],
                 "plan_row": [0.0] * len(columns),
                 "fact_row": [0.0] * len(columns),
             })
@@ -862,7 +986,10 @@ def _plan_context(request, kind, year, month=None, week=None):
     all_funds = fund_balance.load_all_funds()
     balances_up_to = min(period_end_overall, latest_op_date)
     transfer_deltas = fund_balance.load_transfer_deltas()
-    daily_balances = fund_balance.actual_daily_balances(classified, all_funds, balances_up_to, transfer_deltas)
+    daily_balances = fund_balance.actual_daily_balances(
+        classified, all_funds, balances_up_to, transfer_deltas,
+        shares_map=income_shares_map, balance_snapshots=balance_snapshots,
+    )
 
     for group_ref in groups:
         fund = group_ref["name"]
@@ -930,7 +1057,7 @@ def _plan_context(request, kind, year, month=None, week=None):
     # последней датой факта — это прогноз, ему можно "заглядывать вперёд".
     planned_daily_balances = plan_projection.planned_daily_balances(
         classified, income_categories, weekend_flags, all_funds, period_end_overall, transfer_deltas,
-        weekly_plan_map=income_weekly_plan_map,
+        weekly_plan_map=income_weekly_plan_map, shares_map=income_shares_map,
     )
     for group_ref in groups:
         fund = group_ref["name"]

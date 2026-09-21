@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from . import income_plan
-from .fund_balance import DISTRIBUTION_START
+from .fund_balance import DISTRIBUTION_START, resolve_share
 from .logic import aggregate
 from .models import PlanEntry
 
@@ -92,15 +92,19 @@ def planned_daily_fund_expense(fund_names, start_date, end_date):
     return result
 
 
-def planned_daily_balances(classified, income_categories, weekend_flags, all_funds, up_to_date, transfer_deltas=None, weekly_plan_map=None):
+def planned_daily_balances(classified, income_categories, weekend_flags, all_funds, up_to_date, transfer_deltas=None, weekly_plan_map=None, shares_map=None):
     """{фонд: {день: плановый остаток на конец дня}} с DISTRIBUTION_START
     по up_to_date включительно — та же механика, что и
     fund_balance.actual_daily_balances, но на плановых цифрах вместо
     фактических операций. transfer_deltas — ручные перемещения между
     фондами (см. fund_balance.load_transfer_deltas) — это уже случившийся
     факт, а не прогноз, поэтому учитывается и в плановом остатке тоже: раз
-    перевод точно был/будет, прогноз должен его видеть."""
+    перевод точно был/будет, прогноз должен его видеть. shares_map — см.
+    fund_balance.load_income_shares/resolve_share, те же переопределения
+    доли по месяцам, что и в фактическом остатке (иначе план и факт
+    разъедутся по разным % на одной странице "План")."""
     transfer_deltas = transfer_deltas or {}
+    shares_map = shares_map or {}
     fund_names = list(all_funds.keys())
     result = {fund: {} for fund in fund_names}
     if up_to_date < DISTRIBUTION_START:
@@ -114,7 +118,8 @@ def planned_daily_balances(classified, income_categories, weekend_flags, all_fun
     while day <= up_to_date:
         day_income_total = daily_income.get(day, 0.0)
         for fund, info in all_funds.items():
-            fund_income = day_income_total * info["share"]
+            share = resolve_share(fund, day.year, day.month, all_funds, shares_map)
+            fund_income = day_income_total * share
             fund_expense = daily_fund_expense.get(fund, {}).get(day, 0.0)
             fund_transfer = transfer_deltas.get((fund, day), 0.0)
             running[fund] = running[fund] - fund_expense + fund_income + fund_transfer

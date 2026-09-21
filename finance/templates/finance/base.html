@@ -16,7 +16,7 @@
             <a href="{% url 'income' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'income' %}bg-slate-700{% endif %}">📈 Поступления</a>
             <a href="{% url 'expenses' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'expenses' %}bg-slate-700{% endif %}">📉 Расходы</a>
             <a href="{% url 'plan' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'plan' or 'income_plan' in request.resolver_match.url_name %}bg-slate-700{% endif %}">📋 План</a>
-            <a href="{% url 'fund_transfers' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'fund_transfers' %}bg-slate-700{% endif %}">🔄 Перемещение денег</a>
+            <a href="{% url 'fund_transfers' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'fund_transfers' %}bg-slate-700{% endif %}">⚙️ Настройка остатков</a>
             {% if perms.finance.add_operation %}
             <a href="{% url 'upload' %}" class="px-3 py-2 rounded hover:bg-slate-700 {% if request.resolver_match.url_name == 'upload' %}bg-slate-700{% endif %}">📥 Загрузка файла</a>
             {% endif %}

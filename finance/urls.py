@@ -11,6 +11,10 @@ urlpatterns = [
     path("sync-fintablo-full/", views.sync_fintablo_full, name="sync_fintablo_full"),
     path("fund-transfers/", views.fund_transfers, name="fund_transfers"),
     path("fund-transfers/<int:pk>/delete/", views.fund_transfer_delete, name="fund_transfer_delete"),
+    path("fund-transfers/set-balance/", views.set_fund_balance, name="set_fund_balance"),
+    path("fund-transfers/balance-snapshot/<int:pk>/delete/", views.fund_balance_snapshot_delete, name="fund_balance_snapshot_delete"),
+    path("fund-transfers/set-income-share/", views.set_fund_income_share, name="set_fund_income_share"),
+    path("fund-transfers/income-share/<int:pk>/delete/", views.fund_income_share_delete, name="fund_income_share_delete"),
 
     # Поступления
     path("income/<int:year>/", views.income_year, name="income_year"),

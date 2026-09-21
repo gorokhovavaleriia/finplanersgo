@@ -1,8 +1,10 @@
 {% extends "finance/base.html" %}
 {% load finance_extras %}
-{% block title %}Перемещение денег — kiwi{% endblock %}
+{% block title %}Настройка остатков — kiwi{% endblock %}
 {% block content %}
-<h1 class="text-2xl font-bold mb-4">🔄 Перемещение денег между фондами</h1>
+<h1 class="text-2xl font-bold mb-4">⚙️ Настройка остатков</h1>
+
+<h2 class="text-lg font-semibold mb-2">Перемещение денег между фондами</h2>
 <p class="text-sm text-gray-500 mb-4">Не доход и не расход — просто перекладываем деньги из одного фонда в другой. Остатки на "Плане" пересчитаются с даты перемещения.</p>
 
 <form method="post" class="bg-white shadow rounded-lg p-6 max-w-xl mb-8">
@@ -35,8 +37,8 @@
     <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">💾 Сохранить</button>
 </form>
 
-<h2 class="text-lg font-semibold mb-3">История перемещений</h2>
-<div class="bg-white shadow rounded-lg overflow-x-auto max-w-3xl">
+<h3 class="text-base font-semibold mb-3">История перемещений</h3>
+<div class="bg-white shadow rounded-lg overflow-x-auto max-w-3xl mb-10">
 <table class="min-w-full text-sm">
     <thead>
         <tr class="bg-slate-100 text-left">
@@ -65,6 +67,125 @@
         </tr>
         {% empty %}
         <tr><td class="px-3 py-2 text-gray-500" colspan="6">Перемещений пока нет.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<h2 class="text-lg font-semibold mb-2">Остаток фонда на дату</h2>
+<p class="text-sm text-gray-500 mb-4">Точка сверки: "на конец выбранной даты остаток фонда — вот эта сумма". Фактические остатки на "Плане" начиная с этой даты пересчитаются от неё, а не от накопленной суммы операций. Поля, которые оставите пустыми, не тронут остальные фонды.</p>
+
+<form method="post" action="{% url 'set_fund_balance' %}" class="bg-white shadow rounded-lg p-6 max-w-xl mb-8">
+    {% csrf_token %}
+    <div class="mb-4">
+        <label class="block text-sm mb-1">Дата</label>
+        <input type="date" name="date" min="{{ distribution_start }}" required class="border rounded px-2 py-1 w-full">
+    </div>
+    <div class="grid grid-cols-2 gap-4 mb-4">
+        {% for fund in all_funds %}
+        <div>
+            <label class="block text-sm mb-1">{{ fund }}</label>
+            <input type="text" name="balance␟{{ fund }}" placeholder="не менять" class="border rounded px-2 py-1 w-full text-right">
+        </div>
+        {% endfor %}
+    </div>
+    <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">💾 Сохранить остатки</button>
+</form>
+
+<h3 class="text-base font-semibold mb-3">История точек сверки</h3>
+<div class="bg-white shadow rounded-lg overflow-x-auto max-w-3xl mb-10">
+<table class="min-w-full text-sm">
+    <thead>
+        <tr class="bg-slate-100 text-left">
+            <th class="px-3 py-2">Дата</th>
+            <th class="px-3 py-2">Фонд</th>
+            <th class="px-3 py-2 text-right">Остаток</th>
+            <th class="px-3 py-2"></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for s in balance_snapshots %}
+        <tr class="border-t">
+            <td class="px-3 py-2 whitespace-nowrap">{{ s.date|date:"d.m.Y" }}</td>
+            <td class="px-3 py-2">{{ s.fund }}</td>
+            <td class="px-3 py-2 text-right tabular-nums">{{ s.amount|money0 }}</td>
+            <td class="px-3 py-2 text-right">
+                <form method="post" action="{% url 'fund_balance_snapshot_delete' s.pk %}" onsubmit="return confirm('Удалить эту точку сверки?');">
+                    {% csrf_token %}
+                    <button type="submit" class="text-rose-600 hover:underline text-xs">удалить</button>
+                </form>
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td class="px-3 py-2 text-gray-500" colspan="4">Точек сверки пока нет.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<h2 class="text-lg font-semibold mb-2">Распределение поступлений</h2>
+<p class="text-sm text-gray-500 mb-4">Доля каждого фонда от поступлений за выбранный месяц, в процентах. Месяц без сохранённого значения использует долю по умолчанию (как раньше). В годовом виде "Плана" процент не показывается — он теперь может отличаться от месяца к месяцу; в месячном и недельном виде показывается как обычно.</p>
+
+<form method="post" action="{% url 'set_fund_income_share' %}" class="bg-white shadow rounded-lg p-6 max-w-xl mb-8" id="income-share-form">
+    {% csrf_token %}
+    <div class="mb-4">
+        <label class="block text-sm mb-1">Месяц</label>
+        <input type="month" name="month" required class="border rounded px-2 py-1 w-full">
+    </div>
+    <div class="grid grid-cols-2 gap-4 mb-2">
+        {% for fund in all_funds %}
+        <div>
+            <label class="block text-sm mb-1">{{ fund }}</label>
+            <input type="text" name="share␟{{ fund }}" placeholder="не менять" class="border rounded px-2 py-1 w-full text-right income-share-input">
+        </div>
+        {% endfor %}
+    </div>
+    <p class="text-sm text-gray-500 mb-4">Сумма введённого: <span id="income-share-sum">0</span>%</p>
+    <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">💾 Сохранить распределение</button>
+</form>
+
+<script>
+(function () {
+    const form = document.getElementById('income-share-form');
+    if (!form) return;
+    const sumEl = document.getElementById('income-share-sum');
+    function recalc() {
+        let total = 0;
+        form.querySelectorAll('.income-share-input').forEach(function (inp) {
+            total += parseFloat((inp.value || '0').replace(',', '.')) || 0;
+        });
+        sumEl.textContent = Math.round(total * 100) / 100;
+    }
+    form.addEventListener('input', recalc);
+})();
+</script>
+
+<h3 class="text-base font-semibold mb-3">История переопределений</h3>
+<div class="bg-white shadow rounded-lg overflow-x-auto max-w-3xl">
+<table class="min-w-full text-sm">
+    <thead>
+        <tr class="bg-slate-100 text-left">
+            <th class="px-3 py-2">Месяц</th>
+            <th class="px-3 py-2">Фонд</th>
+            <th class="px-3 py-2 text-right">Доля</th>
+            <th class="px-3 py-2"></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for s in income_shares %}
+        <tr class="border-t">
+            <td class="px-3 py-2 whitespace-nowrap">{{ s.month|stringformat:"02d" }}.{{ s.year }}</td>
+            <td class="px-3 py-2">{{ s.fund }}</td>
+            <td class="px-3 py-2 text-right tabular-nums">{{ s.share|percent }}%</td>
+            <td class="px-3 py-2 text-right">
+                <form method="post" action="{% url 'fund_income_share_delete' s.pk %}" onsubmit="return confirm('Удалить это переопределение?');">
+                    {% csrf_token %}
+                    <button type="submit" class="text-rose-600 hover:underline text-xs">удалить</button>
+                </form>
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td class="px-3 py-2 text-gray-500" colspan="4">Переопределений пока нет.</td></tr>
         {% endfor %}
     </tbody>
 </table>
