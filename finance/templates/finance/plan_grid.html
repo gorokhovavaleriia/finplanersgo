@@ -573,13 +573,16 @@ const planForm = document.getElementById('plan-form');
 // перезагрузки страницы. Плана поступлений (чекбоксы "без выходных",
 // переключатель "поднять план") это тоже касается — см. autosaveIncomeField
 // и обработчик change ниже. Общей кнопки "Сохранить план" больше нет.
-function syncCurrentTotal(tr) {
-    const currentCell = tr.querySelector('.current-total');
-    const editedSpan = tr.querySelector('.edited-total');
-    if (currentCell && editedSpan) {
-        currentCell.textContent = editedSpan.textContent;
-    }
-}
+//
+// "Текущий план" (.current-total) сознательно НЕ обновляется по ходу
+// автосохранения — это то, что было сохранено ДО того, как открыли эту
+// неделю/месяц (значение с уровня выше, отрисованное сервером при загрузке
+// страницы), чтобы было с чем сравнить сумму того, что вводите сейчас
+// ("Отредактированный", .edited-total, живо пересчитывается при каждом
+// input — см. recalcEditedTotal). Обновится только при следующей загрузке
+// страницы — после автосохранения сервер и так уже поднял недельный план
+// до этой суммы, просто эта колонка теперь всегда показывает "было", а не
+// "стало".
 
 // Ячейка категории целиком блокируется/разблокируется ПОКОЛОНОЧНО, как
 // только у направлений появляется/пропадает своя сумма за этот же
@@ -652,7 +655,6 @@ function applyCategoryCellUpdate(directionFieldName, categoryCell) {
         td.replaceChildren(input);
     }
     recalcEditedTotal(tr);
-    syncCurrentTotal(tr);
 }
 
 async function autosavePlanField(inp) {
@@ -676,7 +678,6 @@ async function autosavePlanField(inp) {
         if (resp.ok) {
             const fieldName = inp.name;
             inp.defaultValue = inp.value;
-            syncCurrentTotal(inp.closest('tr'));
             inp.classList.add('ring-2', 'ring-emerald-400');
             setTimeout(() => inp.classList.remove('ring-2', 'ring-emerald-400'), 800);
             const data = await resp.json().catch(() => null);
