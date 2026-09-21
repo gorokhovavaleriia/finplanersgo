@@ -1250,15 +1250,30 @@ def plan_save_month(request, year, month):
             row_key = (group, category, subcategory, week_start_date)
             dir_sums[row_key] = dir_sums.get(row_key, 0.0) + value
 
+    def _months_touched(week_start_date):
+        week_end_date = week_start_date + timedelta(days=6)
+        return {(week_start_date.year, week_start_date.month), (week_end_date.year, week_end_date.month)}
+
+    touched = set()
     for group, category, subcategory, direction, week_start_date, value in changed:
         expense_plan.apply_weekly_plan(group, category, subcategory, direction, week_start_date, value)
         expense_plan.redistribute_week_to_days(group, category, subcategory, direction, week_start_date, value)
+        for y, m in _months_touched(week_start_date):
+            touched.add((group, category, subcategory, direction, y, m))
 
     for (group, category, subcategory, week_start_date), total in dir_sums.items():
         current = plan_map.get((group, category, subcategory, "", week_start_date), 0.0)
         if total and total != current:
             expense_plan.apply_weekly_plan(group, category, subcategory, "", week_start_date, total)
             expense_plan.redistribute_week_to_days(group, category, subcategory, "", week_start_date, total)
+            for y, m in _months_touched(week_start_date):
+                touched.add((group, category, subcategory, "", y, m))
+
+    # Месячную сумму (год выше) держим суммой недель этого месяца — см.
+    # expense_plan.sync_monthly_from_weeks. Граничная неделя затрагивает оба
+    # месяца (см. _months_touched выше).
+    for group, category, subcategory, direction, y, m in touched:
+        expense_plan.sync_monthly_from_weeks(group, category, subcategory, direction, y, m)
 
     messages.success(request, "План сохранён")
     return redirect(request.POST.get("next") or "plan_month", year=year, month=month)
@@ -1363,8 +1378,20 @@ def plan_save_field(request):
         if value != current:
             expense_plan.apply_weekly_plan(group, category, subcategory, direction, week_start_date, value)
             expense_plan.redistribute_week_to_days(group, category, subcategory, direction, week_start_date, value)
+            # Месячную сумму (год выше) держим суммой недель этого месяца —
+            # см. expense_plan.sync_monthly_from_weeks, по просьбе
+            # пользователя расходы синхронизируются так же, как поступления.
+            # Граничная неделя (заходит в соседний месяц) затрагивает ОБА —
+            # тот же набор месяцев, что и _week_amount_from_months при
+            # спуске сверху вниз.
+            week_end_date = week_start_date + timedelta(days=6)
+            months_touched = {(week_start_date.year, week_start_date.month), (week_end_date.year, week_end_date.month)}
+            for y, m in months_touched:
+                expense_plan.sync_monthly_from_weeks(group, category, subcategory, direction, y, m)
             if direction:
                 expense_plan.recompute_category_weekly(group, category, subcategory, week_start_date)
+                for y, m in months_touched:
+                    expense_plan.sync_monthly_from_weeks(group, category, subcategory, "", y, m)
         if direction:
             payload["category_cell"] = {
                 "field_name": expense_week_field_name(group, category, subcategory, None, week_start_date),
@@ -1516,11 +1543,12 @@ def income_plan_save_field(request):
             income_plan.redistribute_week_to_days(category, direction, week_start_date, value, works_weekends)
             # И месячную сумму (год выше) тоже держим суммой недель этого
             # месяца — иначе правка недели в месячном виде осталась бы не
-            # видна в годовом (та же логика, только уровнем выше).
-            year = int(request.POST.get("year", 0))
-            month = int(request.POST.get("month", 0))
-            if year and month:
-                income_plan.sync_monthly_from_weeks(category, direction, year, month)
+            # видна в годовом (та же логика, только уровнем выше). Граничная
+            # неделя (заходит в соседний месяц) затрагивает оба — считаем
+            # от самой недели, а не от того, какая страница сейчас открыта.
+            week_end_date = week_start_date + timedelta(days=6)
+            for y, m in {(week_start_date.year, week_start_date.month), (week_end_date.year, week_end_date.month)}:
+                income_plan.sync_monthly_from_weeks(category, direction, y, m)
         elif kind == "week":
             day = date.fromisoformat(suffix)
             week_start_date = day - timedelta(days=day.weekday())
@@ -1860,10 +1888,10 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
 
     Правка дня ВСЕГДА поднимается в недельный план, без тумблера — та же
     логика, что и у расходов (см. income_plan_save_field, её докстринг, и
-    expense_plan/plan_save_field/PLANDAY). Правка недели в месячный план не
-    поднимается вообще (тоже как у расходов — ExpenseMonthlyPlan не
-    пересчитывается из недель, план месяца самостоятелен, вводится в
-    годовом виде)."""
+    expense_plan/plan_save_field/PLANDAY). Правка недели ТОЖЕ ВСЕГДА
+    поднимается в месячный план (как сумма недель этого месяца) — по
+    просьбе пользователя расходы синхронизируются так же, см.
+    (income_plan/expense_plan).sync_monthly_from_weeks."""
     classified, income_categories, _rows = services.load_classified_operations()
     _save_weekend_flags(request, classified, income_categories)
     count = 0
@@ -1896,10 +1924,12 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
             income_plan.apply_weekly_plan(category, direction, week_start_date, value)
             works_weekends = weekend_flags.get((category, direction), False)
             income_plan.redistribute_week_to_days(category, direction, week_start_date, value, works_weekends)
-            touched.add((category, direction))
+            week_end_date = week_start_date + timedelta(days=6)
+            for y, m in {(week_start_date.year, week_start_date.month), (week_end_date.year, week_end_date.month)}:
+                touched.add((category, direction, y, m))
             count += 1
-        for category, direction in touched:
-            income_plan.sync_monthly_from_weeks(category, direction, year, month)
+        for category, direction, y, m in touched:
+            income_plan.sync_monthly_from_weeks(category, direction, y, m)
     else:  # week
         # Каждый день сохраняется отдельно (IncomeDailyPlan), и сумма
         # изменившихся строк сразу поднимается в недельный план (без

@@ -1,18 +1,22 @@
 """Планирование расходов — год -> месяц -> неделя -> день (см. PLAN.md,
 "новая логика планирования расходов"). Зеркалит finance.income_plan
 структурно (месяц — источник истины, вводится в годовом виде, каскадом
-делится по неделям день-в-день), но с другим направлением правки:
+делится по неделям день-в-день) и, как и она, синхронизируется в ОБЕ
+стороны:
 
-- День поднимается в неделю ВСЕГДА при сохранении дневного вида — без
-  тумблера "текущий/отредактированный", в отличие от поступлений (см.
-  redistribute-снизу-вверх нет — тут наоборот, apply_daily_plan просто
-  пишет день, а сумму по дням в неделю поднимает вызывающий код в views.py,
-  см. plan_save).
-- Неделя (в месячном виде) и месяц (в годовом виде), наоборот, спускаются
-  ВНИЗ (пересчитывают то, что мельче) — но только когда значение реально
-  изменилось, и только если внизу уже есть данные, на клиенте сначала
-  спрашивают подтверждение (см. plan_grid.html); сервер просто выполняет
-  то, что подтвердили — см. redistribute_week_to_days/apply_monthly_plan."""
+- Правка снизу (день -> неделя, неделя -> месяц) ВСЕГДА поднимается наверх
+  как сумма того, что мельче — без тумблера "текущий/отредактированный".
+  День поднимается в неделю при сохранении дневного вида (apply_daily_plan
+  пишет день, сумму по дням в неделю поднимает вызывающий код в views.py,
+  см. plan_save/PLANDAY); неделя поднимается в месяц через
+  sync_monthly_from_weeks (см. её докстринг) — вызывается после правки
+  недели в месячном виде.
+- Правка сверху (месяц -> недели, неделя -> дни), наоборот, спускается ВНИЗ
+  (пересчитывает то, что мельче, поровну) — но только когда значение
+  реально изменилось, и только если внизу уже есть данные, на клиенте
+  сначала спрашивают подтверждение (см. plan_grid.html); сервер просто
+  выполняет то, что подтвердили — см.
+  redistribute_week_to_days/apply_monthly_plan."""
 
 import calendar
 from datetime import date, timedelta
@@ -109,6 +113,25 @@ def apply_daily_plan(group, category, subcategory, direction, day, amount):
     ExpenseDailyPlan.objects.update_or_create(
         group=group, category=category, subcategory=subcategory, direction=direction, day=day,
         defaults={"amount": amount},
+    )
+
+
+def sync_monthly_from_weeks(group, category, subcategory, direction, year, month):
+    """Пересчитывает месячную сумму (ExpenseMonthlyPlan) как сумму ВСЕХ
+    недель этого месяца (aggregate.month_weeks) — вызывается после правки
+    отдельной недели в месячном виде, чтобы месяц всегда оставался суммой
+    того, что видно по неделям, а не отдельной, разъезжающейся с ними
+    цифрой (то же самое, что и income_plan.sync_monthly_from_weeks — по
+    просьбе пользователя расходы должны вести себя так же). В отличие от
+    apply_monthly_plan (та, наоборот, разносит месяц ПО неделям), сами
+    недели не трогает — только читает и складывает."""
+    total = sum(
+        get_weekly_plan(group, category, subcategory, direction, week_start)
+        for week_start, _week_end in aggregate.month_weeks(year, month)
+    )
+    ExpenseMonthlyPlan.objects.update_or_create(
+        group=group, category=category, subcategory=subcategory, direction=direction, year=year, month=month,
+        defaults={"amount": total},
     )
 
 
