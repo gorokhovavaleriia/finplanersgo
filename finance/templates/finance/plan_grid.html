@@ -127,7 +127,8 @@
             <td class="px-1 py-1">
                 {% if cell.editable %}
                 <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
-                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums">
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums{% if cell.has_lower %} plan-cascade-input{% endif %}"
+                       {% if cell.has_lower is not None %}data-has-lower="{{ cell.has_lower|yesno:'true,false' }}" data-cascade-label="дням недели"{% endif %}>
                 {% elif cell.value is not None %}
                 <div class="px-2 py-1 text-right tabular-nums text-gray-400 italic">{{ cell.value|money0 }}</div>
                 {% endif %}
@@ -165,7 +166,8 @@
             <td class="px-1 py-1">
                 {% if cell.editable %}
                 <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
-                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums">
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums{% if cell.has_lower %} plan-cascade-input{% endif %}"
+                       {% if cell.has_lower is not None %}data-has-lower="{{ cell.has_lower|yesno:'true,false' }}" data-cascade-label="дням недели"{% endif %}>
                 {% endif %}
             </td>
             {% endfor %}
@@ -716,6 +718,7 @@ document.addEventListener('blur', function (e) {
 // отображение, сами данные сохраняются верно сразу).
 async function autosaveIncomeField(inp) {
     if (inp.value === inp.defaultValue) return;
+    if (!confirmCascadeIfNeeded(inp)) return;
 
     const csrfToken = planForm.querySelector('[name=csrfmiddlewaretoken]').value;
     const body = new URLSearchParams();

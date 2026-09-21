@@ -107,18 +107,30 @@ def apply_weekly_plan(category, direction, week_start, amount):
     )
 
 
-def set_monthly_plan_total(category, direction, year, month, amount):
-    """Обновляет ТОЛЬКО месячную сумму — в отличие от apply_monthly_plan, НЕ
-    пересчитывает недели этого месяца. Нужно, когда пользователь в
-    недельном виде отредактировал недели и явно попросил тумблером
-    "отредактированный" поднять их сумму в месячный план — если бы вместо
-    этого вызвали apply_monthly_plan, он тут же переразбил бы месяц поровну
-    по дням и стёр только что введённые (специально разные) недельные
-    суммы."""
-    IncomeMonthlyPlan.objects.update_or_create(
-        category=category, direction=direction or "", year=year, month=month,
-        defaults={"amount": amount},
-    )
+def redistribute_week_to_days(category, direction, week_start, amount, works_weekends):
+    """Делит недельную сумму по дням (через daily_split — 5 будних или 7
+    дней, в зависимости от works_weekends) и переписывает дневной план
+    (IncomeDailyPlan) — вызывается, когда неделю правят "сверху" (в
+    месячном виде). Без этого правка недели меняет только IncomePlanEntry,
+    а старые (уже неактуальные) записи по дням остаются как были — из-за
+    этого planned_daily_income (день за днём смотрит именно в дневные
+    данные, если они есть) считает по устаревшим дням, а не по новой
+    недельной сумме, и разъезжается с таблицей плана поступлений, которая
+    просто суммирует IncomePlanEntry напрямую."""
+    for day, value in daily_split(amount, week_start, works_weekends):
+        if value is not None:
+            apply_daily_plan(category, direction, day, value)
+
+
+def week_has_daily_data(category, direction, week_start):
+    """Есть ли у этой недели уже свои дневные данные — если да, правка
+    недели "сверху" должна сначала спросить подтверждение (см.
+    redistribute_week_to_days), иначе тихо перезапишет то, что пользователь
+    мог вручную поправить по дням."""
+    end = week_start + timedelta(days=6)
+    return IncomeDailyPlan.objects.filter(
+        category=category, direction=direction or "", day__gte=week_start, day__lte=end,
+    ).exists()
 
 
 def get_daily_plan(category, direction, day):

@@ -1503,7 +1503,17 @@ def income_plan_save_field(request):
             year = int(request.POST.get("year", 0))
             income_plan.apply_monthly_plan(category, direction, year, int(suffix), value)
         elif kind == "month":
-            income_plan.apply_weekly_plan(category, direction, date.fromisoformat(suffix), value)
+            week_start_date = date.fromisoformat(suffix)
+            income_plan.apply_weekly_plan(category, direction, week_start_date, value)
+            # Дневную разбивку этой недели тоже надо обновить — иначе она
+            # останется от старой недельной суммы, и planned_daily_income
+            # (смотрит в дневные данные, если они есть) будет считать
+            # остаток по устаревшим дням, разъезжаясь с этой же таблицей
+            # плана поступлений (та просто суммирует IncomePlanEntry
+            # напрямую). Подтверждение перезаписи уже спросили на клиенте,
+            # если внизу были свои дневные данные (см. plan-cascade-input).
+            works_weekends = income_plan.load_weekend_flags().get((category, direction), False)
+            income_plan.redistribute_week_to_days(category, direction, week_start_date, value, works_weekends)
         elif kind == "week":
             day = date.fromisoformat(suffix)
             week_start_date = day - timedelta(days=day.weekday())
@@ -1663,7 +1673,10 @@ def _income_plan_table_month(classified, income_categories, weekend_flags, year,
             d_total = 0.0
             for col in columns:
                 v = income_plan.get_weekly_plan(category, _dir_key(direction), col["start"], plan_map=weekly_plan_map)
-                d_cells.append({"value": v, "editable": True, "field_name": income_plan_field_name(category, direction, col["start"].isoformat())})
+                cell = {"value": v, "editable": True, "field_name": income_plan_field_name(category, direction, col["start"].isoformat())}
+                if row["daily_split"]:
+                    cell["has_lower"] = income_plan.week_has_daily_data(category, _dir_key(direction), col["start"])
+                d_cells.append(cell)
                 d_total += v
             dir_rows.append({
                 "direction": direction, "cells": d_cells, "total": d_total,
@@ -1687,7 +1700,10 @@ def _income_plan_table_month(classified, income_categories, weekend_flags, year,
                 cells.append({"value": value, "editable": False})
             else:
                 value = income_plan.get_weekly_plan(category, None, col["start"], plan_map=weekly_plan_map)
-                cells.append({"value": value, "editable": True, "field_name": income_plan_field_name(category, None, col["start"].isoformat())})
+                cell = {"value": value, "editable": True, "field_name": income_plan_field_name(category, None, col["start"].isoformat())}
+                if row["daily_split"]:
+                    cell["has_lower"] = income_plan.week_has_daily_data(category, "", col["start"])
+                cells.append(cell)
             row_total += value
             col_totals[idx] += value
 
@@ -1857,13 +1873,20 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
             count += 1
     elif kind == "month":
         # Недели сохраняются как введены — месячный план (уровень выше) не
-        # трогаем совсем, см. докстринг выше.
+        # трогаем совсем, см. докстринг выше. Дневную разбивку недели тоже
+        # обновляем (redistribute_week_to_days) — иначе она останется от
+        # старой суммы и разъедется с plan_projection.planned_daily_income,
+        # см. комментарий в income_plan_save_field.
+        weekend_flags = income_plan.load_weekend_flags()
         for key, raw_value in request.POST.items():
             if not key.startswith(IPLAN_PREFIX):
                 continue
             _prefix, category, direction, week_start_str = key.split(IPLAN_SEP)
             value = _parse_money(raw_value)
-            income_plan.apply_weekly_plan(category, direction, date.fromisoformat(week_start_str), value)
+            week_start_date = date.fromisoformat(week_start_str)
+            income_plan.apply_weekly_plan(category, direction, week_start_date, value)
+            works_weekends = weekend_flags.get((category, direction), False)
+            income_plan.redistribute_week_to_days(category, direction, week_start_date, value, works_weekends)
             count += 1
     else:  # week
         # Каждый день сохраняется отдельно (IncomeDailyPlan), и сумма

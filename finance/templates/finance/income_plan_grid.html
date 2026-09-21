@@ -71,7 +71,8 @@
             <td class="px-1 py-1">
                 {% if cell.editable %}
                 <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
-                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900{% if cell.has_lower %} plan-cascade-input{% endif %}"
+                       {% if cell.has_lower is not None %}data-has-lower="{{ cell.has_lower|yesno:'true,false' }}" data-cascade-label="дням недели"{% endif %}>
                 {% elif cell.value is not None %}
                 <div class="px-2 py-1 text-right tabular-nums text-gray-300 italic">{{ cell.value|money0 }}</div>
                 {% endif %}
@@ -109,7 +110,8 @@
             <td class="px-1 py-1">
                 {% if cell.editable %}
                 <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
-                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900{% if cell.has_lower %} plan-cascade-input{% endif %}"
+                       {% if cell.has_lower is not None %}data-has-lower="{{ cell.has_lower|yesno:'true,false' }}" data-cascade-label="дням недели"{% endif %}>
                 {% endif %}
             </td>
             {% endfor %}
@@ -203,12 +205,31 @@ document.addEventListener('input', function (e) {
     }
 });
 
+// Правка недели сверху (в месячном виде) молча перезаписывает дни, если
+// они уже есть, — сначала спрашиваем на клиенте (см. plan_grid.html, та же
+// механика). Если отказались — откатываем поле к исходному значению, запрос
+// не уйдёт.
+function confirmCascadeIfNeeded(inp) {
+    if (inp.value === inp.defaultValue) return true;
+    if (inp.classList.contains('plan-cascade-input') && inp.dataset.hasLower === 'true') {
+        const label = inp.dataset.cascadeLabel || 'нижнему уровню';
+        const ok = window.confirm('По ' + label + ' уже есть свои данные. Обновить план и пересчитать их по новой сумме?');
+        if (!ok) {
+            inp.value = inp.defaultValue;
+            recalcEditedTotal(inp.closest('tr'));
+            return false;
+        }
+    }
+    return true;
+}
+
 // Автосохранение по уходу с поля (blur) — см. plan_grid.html, тот же
 // принцип и тот же эндпоинт (income_plan_save_field). keepalive: true —
 // иначе быстрый клик по ссылке сразу после ввода обрывает ещё не
 // отправленный запрос вместе с уходом со страницы, и правка молча теряется.
 async function autosaveIncomeField(inp) {
     if (inp.value === inp.defaultValue) return;
+    if (!confirmCascadeIfNeeded(inp)) return;
 
     const csrfToken = planForm.querySelector('[name=csrfmiddlewaretoken]').value;
     const body = new URLSearchParams();
