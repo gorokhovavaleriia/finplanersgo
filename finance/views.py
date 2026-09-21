@@ -541,12 +541,25 @@ def _month_has_weekly_data_cached(plan_map, group, category, sub_key, dir_key, y
     return False
 
 
-def _load_expense_daily_map(week_start):
-    end = week_start + timedelta(days=6)
+def _load_expense_daily_map(start, end=None):
+    if end is None:
+        end = start + timedelta(days=6)
     return {
         (p.group, p.category, p.subcategory or "", p.direction or "", p.day): float(p.amount)
-        for p in ExpenseDailyPlan.objects.filter(day__gte=week_start, day__lte=end)
+        for p in ExpenseDailyPlan.objects.filter(day__gte=start, day__lte=end)
     }
+
+
+def _week_has_daily_data_cached(daily_map, group, category, sub_key, dir_key, week_start):
+    # Заменяет expense_plan.week_has_daily_data — та же логика (есть ли у
+    # недели уже свои дневные данные), но по уже загруженному в память
+    # daily_map, а не отдельным EXISTS-запросом на каждую ячейку месячного
+    # вида (на весь месяц — сотни направлений x недель, это и было основной
+    # причиной медленной загрузки месячного плана).
+    for i in range(7):
+        if (group, category, sub_key, dir_key, week_start + timedelta(days=i)) in daily_map:
+            return True
+    return False
 
 
 def _expense_day_cells(daily_map, group, category, subcategory, direction, week_start, weekly_total):
@@ -640,6 +653,14 @@ def _plan_context(request, kind, year, month=None, week=None):
 
     week_start_for_input = week[0] if kind == "week" else None
     daily_map = _load_expense_daily_map(week_start_for_input) if kind == "week" else None
+    # Один запрос на весь месяц вместо EXISTS на каждую ячейку недели — см.
+    # _week_has_daily_data_cached, используется ниже вместо
+    # expense_plan.week_has_daily_data в цикле по неделям месяца.
+    month_daily_map = None
+    if kind == "month":
+        week_starts = [key[0] for _label, key in columns]
+        week_ends = [key[1] for _label, key in columns]
+        month_daily_map = _load_expense_daily_map(min(week_starts), max(week_ends))
 
     groups = []
     current_group = None
@@ -694,7 +715,7 @@ def _plan_context(request, kind, year, month=None, week=None):
                         {
                             "value": d_plan_cells[idx],
                             "field_name": expense_week_field_name(group, category, subcategory, direction, key[0]),
-                            "has_lower": expense_plan.week_has_daily_data(group, category, sub_key, dir_key, key[0]),
+                            "has_lower": _week_has_daily_data_cached(month_daily_map, group, category, sub_key, dir_key, key[0]),
                         }
                         for idx, (_label, key) in enumerate(columns)
                     ]
@@ -761,7 +782,7 @@ def _plan_context(request, kind, year, month=None, week=None):
                     plan_edit_cells.append({
                         "value": value, "editable": True,
                         "field_name": expense_week_field_name(group, category, subcategory, None, key[0]),
-                        "has_lower": expense_plan.week_has_daily_data(group, category, sub_key, "", key[0]),
+                        "has_lower": _week_has_daily_data_cached(month_daily_map, group, category, sub_key, "", key[0]),
                     })
             plan_total = sum(plan_cells)
             day_cells = None
