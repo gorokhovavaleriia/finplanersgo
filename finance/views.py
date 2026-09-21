@@ -4,11 +4,11 @@ from datetime import date, timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db.models import Sum
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 
-from . import expense_plan, fund_balance, income_plan, plan_projection, services
+from . import expense_plan, fund_balance, income_plan, plan_export, plan_projection, services
 from .fintablo import FintabloError
 from .fintablo_sync import DEFAULT_SYNC_FROM, incremental_sync_from, sync_operations
 from .forms import FundTransferForm, UploadOperationsForm
@@ -1168,6 +1168,32 @@ def plan_week(request, year, month, week_start):
     start = date.fromisoformat(week_start)
     end = start + timedelta(days=6)
     return render(request, "finance/plan_grid.html", _plan_context(request, "week", year, month=month, week=(start, end)))
+
+
+def _plan_export_response(ctx, filename):
+    wb = plan_export.build_plan_workbook(ctx)
+    response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
+
+
+@login_required
+def plan_export_year(request, year):
+    return _plan_export_response(_plan_context(request, "year", year), f"plan-{year}.xlsx")
+
+
+@login_required
+def plan_export_month(request, year, month):
+    return _plan_export_response(_plan_context(request, "month", year, month=month), f"plan-{year}-{month:02d}.xlsx")
+
+
+@login_required
+def plan_export_week(request, year, month, week_start):
+    start = date.fromisoformat(week_start)
+    end = start + timedelta(days=6)
+    ctx = _plan_context(request, "week", year, month=month, week=(start, end))
+    return _plan_export_response(ctx, f"plan-{start.isoformat()}.xlsx")
 
 
 @login_required

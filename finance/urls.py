@@ -30,7 +30,12 @@ urlpatterns = [
 
     # План (расходы)
     path("plan/<int:year>/", views.plan_year, name="plan_year"),
+    path("plan/<int:year>/export/", views.plan_export_year, name="plan_export_year"),
     path("plan/<int:year>/<int:month>/", views.plan_month, name="plan_month"),
+    path("plan/<int:year>/<int:month>/export/", views.plan_export_month, name="plan_export_month"),
+    # Оба export-маршрута выше и ниже — до plan_week: иначе её <str:week_start>
+    # ловит "export" как будто это дата недели (падает на fromisoformat).
+    path("plan/<int:year>/<int:month>/<str:week_start>/export/", views.plan_export_week, name="plan_export_week"),
     path("plan/<int:year>/<int:month>/<str:week_start>/", views.plan_week, name="plan_week"),
     path("plan/save-year/<int:year>/", views.plan_save_year, name="plan_save_year"),
     path("plan/save-month/<int:year>/<int:month>/", views.plan_save_month, name="plan_save_month"),
