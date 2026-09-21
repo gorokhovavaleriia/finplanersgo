@@ -37,20 +37,27 @@ def _income_leaf_specs(classified, income_categories):
     return specs
 
 
-def planned_daily_income(classified, income_categories, weekend_flags, start_date, end_date, weekly_plan_map=None):
+def planned_daily_income(classified, income_categories, weekend_flags, start_date, end_date, weekly_plan_map=None, daily_plan_map=None):
     """{день: плановое поступление за день} — сумма по всем листьям дерева
-    поступлений, каждый недельный план поделён на дни через тот же
-    income_plan.daily_split, что и в дневном виде (для категорий, которые
-    туда не делятся, флаг "без выходных" всегда False — 5 будних дней).
+    поступлений. Для дня без своего значения в IncomeDailyPlan: если у этой
+    категории/направления в этой неделе УЖЕ есть хоть один явно заданный
+    день — 0 (день, который явно не трогали, ничего в план не вносит);
+    иначе — дефолт из income_plan.daily_split (недельный план поровну на
+    рабочие дни, как и в дневном виде до первой правки). Раньше здесь
+    всегда был только daily_split(), без учёта IncomeDailyPlan вообще — тот
+    же класс бага, что был у planned_daily_fund_expense (см. её докстринг).
 
-    weekly_plan_map — заранее загруженный income_plan.load_weekly_plan_map()
-    (передаётся вызывающей стороной, чтобы не грузить одну и ту же таблицу
-    заново на каждый вызов — эта функция зовётся дважды за один рендер
-    страницы "План"); если не передан, грузится сам одним запросом."""
+    weekly_plan_map/daily_plan_map — заранее загруженные
+    income_plan.load_weekly_plan_map()/load_daily_plan_map() (передаются
+    вызывающей стороной, чтобы не грузить одни и те же таблицы заново на
+    каждый вызов — эта функция зовётся дважды за один рендер страницы
+    "План"); если не переданы, грузятся сами одним запросом каждая."""
     if end_date < start_date:
         return {}
     if weekly_plan_map is None:
         weekly_plan_map = income_plan.load_weekly_plan_map()
+    if daily_plan_map is None:
+        daily_plan_map = income_plan.load_daily_plan_map()
     specs = _income_leaf_specs(classified, income_categories)
     result = defaultdict(float)
     week_cache = {}
@@ -63,8 +70,16 @@ def planned_daily_income(classified, income_categories, weekend_flags, start_dat
                 dir_key = _dir_key(direction)
                 weekly = income_plan.get_weekly_plan(category, dir_key, ws, plan_map=weekly_plan_map)
                 works_weekends = weekend_flags.get((category, dir_key), False)
-                for d, v in income_plan.daily_split(weekly, ws, works_weekends):
-                    per_day[d] += v or 0.0
+                daily = income_plan.daily_split(weekly, ws, works_weekends)
+                has_daily_data = any((category, dir_key, d) in daily_plan_map for d, v in daily if v is not None)
+                for d, v in daily:
+                    if v is None:
+                        continue
+                    override = daily_plan_map.get((category, dir_key, d))
+                    if override is not None:
+                        per_day[d] += override
+                    elif not has_daily_data:
+                        per_day[d] += v or 0.0
             week_cache[ws] = per_day
         result[day] = week_cache[ws].get(day, 0.0)
         day += timedelta(days=1)
@@ -130,7 +145,7 @@ def planned_daily_fund_expense(fund_names, start_date, end_date):
     return result
 
 
-def planned_daily_balances(classified, income_categories, weekend_flags, all_funds, up_to_date, transfer_deltas=None, weekly_plan_map=None, shares_map=None):
+def planned_daily_balances(classified, income_categories, weekend_flags, all_funds, up_to_date, transfer_deltas=None, weekly_plan_map=None, shares_map=None, daily_plan_map=None):
     """{фонд: {день: плановый остаток на конец дня}} с DISTRIBUTION_START
     по up_to_date включительно — та же механика, что и
     fund_balance.actual_daily_balances, но на плановых цифрах вместо
@@ -148,7 +163,10 @@ def planned_daily_balances(classified, income_categories, weekend_flags, all_fun
     if up_to_date < DISTRIBUTION_START:
         return result
 
-    daily_income = planned_daily_income(classified, income_categories, weekend_flags, DISTRIBUTION_START, up_to_date, weekly_plan_map=weekly_plan_map)
+    daily_income = planned_daily_income(
+        classified, income_categories, weekend_flags, DISTRIBUTION_START, up_to_date,
+        weekly_plan_map=weekly_plan_map, daily_plan_map=daily_plan_map,
+    )
     daily_fund_expense = planned_daily_fund_expense(fund_names, DISTRIBUTION_START, up_to_date)
 
     running = {fund: info["balance"] for fund, info in all_funds.items()}

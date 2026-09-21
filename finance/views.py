@@ -741,6 +741,7 @@ def _plan_context(request, kind, year, month=None, week=None):
     # встроенном блоке "Планирование поступлений" (_income_plan_table_*).
     income_weekly_plan_map = income_plan.load_weekly_plan_map()
     income_monthly_plan_map = income_plan.load_monthly_plan_map()
+    income_daily_plan_map = income_plan.load_daily_plan_map()
 
     if kind == "year":
         _rows, columns, data = aggregate.expense_year_table(classified, rows, year)
@@ -761,7 +762,7 @@ def _plan_context(request, kind, year, month=None, week=None):
     full_daily_planned_income = plan_projection.planned_daily_income(
         classified, income_categories, weekend_flags,
         period_ranges[0][0] if period_ranges else date.today(), period_end_overall,
-        weekly_plan_map=income_weekly_plan_map,
+        weekly_plan_map=income_weekly_plan_map, daily_plan_map=income_daily_plan_map,
     )
     planned_income_values = [_sum_days(full_daily_planned_income, s, e) for s, e in period_ranges]
     settled_col = [fund_balance.DISTRIBUTION_START <= end <= latest_op_date for _s, end in period_ranges]
@@ -1071,7 +1072,7 @@ def _plan_context(request, kind, year, month=None, week=None):
     # последней датой факта — это прогноз, ему можно "заглядывать вперёд".
     planned_daily_balances = plan_projection.planned_daily_balances(
         classified, income_categories, weekend_flags, all_funds, period_end_overall, transfer_deltas,
-        weekly_plan_map=income_weekly_plan_map, shares_map=income_shares_map,
+        weekly_plan_map=income_weekly_plan_map, shares_map=income_shares_map, daily_plan_map=income_daily_plan_map,
     )
     for group_ref in groups:
         fund = group_ref["name"]
@@ -1443,21 +1444,23 @@ def weekend_field_name(category, direction):
     return IPLAN_SEP.join(["weekend", category, _dir_key(direction)])
 
 
-def income_plan_mode_field_name(category, direction):
-    """Тумблер "текущий план"/"отредактированный" — см. PLAN.md, п.2:
-    правка дней/недель этой строки по умолчанию НЕ меняет план уровня выше
-    (недели/месяца) — "current" — только явный выбор "edited" поднимает
-    сумму отредактированных ячеек вверх при сохранении."""
-    return IPLAN_SEP.join(["mode", category, _dir_key(direction)])
-
-
 @login_required
 def income_plan_save_field(request):
     """Мгновенное сохранение ОДНОГО поля плана поступлений — значения
-    месяца/недели/дня, чекбокса "без выходных" или переключателя "поднять
-    план" — тот же принцип, что и plan_save_field для расходов (см. её
-    докстринг), чтобы для встроенного блока "Планирование поступлений" на
-    странице "План" тоже можно было убрать общую кнопку "Сохранить план".
+    месяца/недели/дня или чекбокса "без выходных" — тот же принцип, что и
+    plan_save_field для расходов (см. её докстринг), чтобы для встроенного
+    блока "Планирование поступлений" на странице "План" тоже можно было
+    убрать общую кнопку "Сохранить план".
+
+    Правка дня ВСЕГДА поднимается в недельный план (без тумблера) — та же
+    логика, что и у расходов (см. PLAN.md, "новая логика планирования
+    расходов" и expense_plan/plan_save_field/PLANDAY): день — самый нижний
+    уровень, конфликтовать не с чем, значение недели просто пересчитывается
+    как сумма её дней (нетронутые дни — 0, см. income_plan.load_daily_plan_map).
+    А вот правка недели (в месячном виде) НЕ поднимается в месячный план
+    автоматически — так же, как и у расходов ExpenseMonthlyPlan не
+    пересчитывается из недель: план месяца — самостоятельная цифра,
+    вводится отдельно (в годовом виде), недели её только детализируют.
 
     kind ("year"/"month"/"week") передаёт клиент — он и так знает, на какой
     странице находится; без него "iplan␟категория␟направление␟суффикс" был
@@ -1483,30 +1486,16 @@ def income_plan_save_field(request):
         elif kind == "month":
             income_plan.apply_weekly_plan(category, direction, date.fromisoformat(suffix), value)
         elif kind == "week":
-            income_plan.apply_daily_plan(category, direction, date.fromisoformat(suffix), value)
+            day = date.fromisoformat(suffix)
+            income_plan.apply_daily_plan(category, direction, day, value)
+            week_start_date = day - timedelta(days=day.weekday())
+            week_total = 0.0
+            for i in range(7):
+                v = income_plan.get_daily_plan(category, direction, week_start_date + timedelta(days=i))
+                week_total += v or 0.0
+            income_plan.apply_weekly_plan(category, direction, week_start_date, week_total)
         else:
             return JsonResponse({"ok": False, "error": "bad kind"}, status=400)
-        return JsonResponse({"ok": True})
-
-    if field.startswith(f"mode{IPLAN_SEP}") and len(parts) == 3:
-        # Выбор "edited" — разовое действие "поднять план уровня выше до
-        # суммы отредактированных ячеек прямо сейчас" (см. income_plan_mode_field_name);
-        # переключатель не хранится между заходами — шаблон всегда рисует
-        # "current" отмеченным, так было и раньше, до автосохранения.
-        # Выбор "current" ничего не делает — план уровня выше просто
-        # остаётся тем, каким был.
-        _prefix, category, direction = parts
-        if request.POST.get("value") == "edited":
-            total = _parse_money(request.POST.get("total", "0"))
-            if kind == "month":
-                year = int(request.POST.get("year", 0))
-                month = int(request.POST.get("month", 0))
-                income_plan.set_monthly_plan_total(category, direction, year, month, total)
-            elif kind == "week":
-                week_start_date = date.fromisoformat(request.POST.get("week_start", ""))
-                income_plan.apply_weekly_plan(category, direction, week_start_date, total)
-            else:
-                return JsonResponse({"ok": False, "error": "bad kind"}, status=400)
         return JsonResponse({"ok": True})
 
     return JsonResponse({"ok": False, "error": "unknown field"}, status=400)
@@ -1644,7 +1633,6 @@ def _income_plan_table_month(classified, income_categories, weekend_flags, year,
             dir_rows.append({
                 "direction": direction, "cells": d_cells, "total": d_total,
                 "current_total": d_total, "edited_total": d_total,
-                "mode_field_name": income_plan_mode_field_name(category, direction),
                 "works_weekends": row["direction_weekends"].get(direction, False),
                 "weekend_field_name": weekend_field_name(category, direction),
                 "daily_split": row["daily_split"],
@@ -1673,7 +1661,6 @@ def _income_plan_table_month(classified, income_categories, weekend_flags, year,
             "weekend_field_name": weekend_field_name(category, None),
             "cells": cells, "total": row_total, "directions": dir_rows, "expandable": expandable,
             "current_total": row_total, "edited_total": row_total,
-            "mode_field_name": income_plan_mode_field_name(category, None),
             "daily_split": row["daily_split"],
         })
 
@@ -1699,6 +1686,7 @@ def income_plan_month(request, year, month):
 
 def _income_plan_table_week(classified, income_categories, weekend_flags, start):
     cat_rows = _income_plan_rows(classified, income_categories, weekend_flags)
+    daily_plan_map = income_plan.load_daily_plan_map()
 
     days = [start + timedelta(days=i) for i in range(7)]
     columns = [{"label": d.strftime("%d.%m"), "day": d} for d in days]
@@ -1707,13 +1695,23 @@ def _income_plan_table_week(classified, income_categories, weekend_flags, start)
     def _day_cells(category, direction, works_weekends, weekly_total):
         dir_key = _dir_key(direction)
         daily = income_plan.daily_split(weekly_total, start, works_weekends)
+        # Если у этой строки в этой неделе уже есть хоть один явно заданный
+        # день — остальные (без своего значения) считаются нулём, а не
+        # дефолтом от daily_split(). Иначе, стоит поправить всего один день,
+        # у остальных, ещё не тронутых, "из ниоткуда" менялся бы плейсхолдер
+        # каждый раз, как меняется недельная сумма — тот же баг, что был у
+        # расходов, см. views._expense_day_cells.
+        has_daily_data = any((category, dir_key, d) in daily_plan_map for d, v in daily if v is not None)
         out = []
         for d, default_v in daily:
             if default_v is None:
                 out.append({"value": None, "field_name": None, "editable": False})
                 continue
-            override = income_plan.get_daily_plan(category, dir_key, d)
-            v = override if override is not None else default_v
+            override = daily_plan_map.get((category, dir_key, d))
+            if override is not None:
+                v = override
+            else:
+                v = 0.0 if has_daily_data else default_v
             out.append({"value": v, "field_name": income_plan_field_name(category, direction, d.isoformat()), "editable": True})
         return out
 
@@ -1741,7 +1739,6 @@ def _income_plan_table_week(classified, income_categories, weekend_flags, start)
                 "total": d_weekly_total, "current_total": d_weekly_total, "edited_total": d_edited_total,
                 "works_weekends": d_works_weekends,
                 "weekend_field_name": weekend_field_name(category, direction),
-                "mode_field_name": income_plan_mode_field_name(category, direction),
                 "daily_split": daily_editable,
             })
 
@@ -1773,7 +1770,6 @@ def _income_plan_table_week(classified, income_categories, weekend_flags, start)
             "weekend_field_name": weekend_field_name(category, None),
             "cells": cells, "total": weekly_total, "directions": dir_rows, "expandable": expandable,
             "current_total": current_total, "edited_total": edited_total,
-            "mode_field_name": income_plan_mode_field_name(category, None),
             "daily_split": daily_editable,
         })
 
@@ -1802,8 +1798,14 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
     """Общая логика сохранения плана поступлений — переиспользуется и
     отдельной страницей "Планирование поступлений" (income_plan_save_*), и
     встроенным блоком на странице "План" (plan_save_year/plan_save_month/
-    plan_save), чтобы не дублировать разбор полей и логику тумблера
-    "текущий план"/"отредактированный"."""
+    plan_save), чтобы не дублировать разбор полей.
+
+    Правка дня ВСЕГДА поднимается в недельный план, без тумблера — та же
+    логика, что и у расходов (см. income_plan_save_field, её докстринг, и
+    expense_plan/plan_save_field/PLANDAY). Правка недели в месячный план не
+    поднимается вообще (тоже как у расходов — ExpenseMonthlyPlan не
+    пересчитывается из недель, план месяца самостоятелен, вводится в
+    годовом виде)."""
     classified, income_categories, _rows = services.load_classified_operations()
     _save_weekend_flags(request, classified, income_categories)
     count = 0
@@ -1819,28 +1821,19 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
             income_plan.apply_monthly_plan(category, direction, year, int(month_str), value)
             count += 1
     elif kind == "month":
-        # Недели всегда сохраняются как введены (можно поправить/посмотреть
-        # отдельную неделю). Месячный план (уровень выше) трогаем ТОЛЬКО
-        # если по этой категории/направлению тумблер стоит на
-        # "отредактированный" — иначе он остаётся как был, см. PLAN.md п.2.
-        monthly_sums = {}
+        # Недели сохраняются как введены — месячный план (уровень выше) не
+        # трогаем совсем, см. докстринг выше.
         for key, raw_value in request.POST.items():
             if not key.startswith(IPLAN_PREFIX):
                 continue
             _prefix, category, direction, week_start_str = key.split(IPLAN_SEP)
             value = _parse_money(raw_value)
             income_plan.apply_weekly_plan(category, direction, date.fromisoformat(week_start_str), value)
-            monthly_sums[(category, direction)] = monthly_sums.get((category, direction), 0.0) + value
             count += 1
-        for (category, direction), total in monthly_sums.items():
-            mode = request.POST.get(IPLAN_SEP.join(["mode", category, direction]), "current")
-            if mode == "edited":
-                income_plan.set_monthly_plan_total(category, direction, year, month, total)
     else:  # week
-        # Каждый день сохраняется отдельно (IncomeDailyPlan) — можно
-        # поправить/посмотреть план на конкретный день, не трогая план
-        # недели. Недельный план (уровень выше) трогаем ТОЛЬКО если тумблер
-        # стоит на "отредактированный".
+        # Каждый день сохраняется отдельно (IncomeDailyPlan), и сумма
+        # изменившихся строк сразу поднимается в недельный план (без
+        # тумблера — см. докстринг выше).
         weekly_sums = {}
         for key, raw_value in request.POST.items():
             if not key.startswith(IPLAN_PREFIX):
@@ -1851,9 +1844,7 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
             weekly_sums[(category, direction)] = weekly_sums.get((category, direction), 0.0) + value
             count += 1
         for (category, direction), total in weekly_sums.items():
-            mode = request.POST.get(IPLAN_SEP.join(["mode", category, direction]), "current")
-            if mode == "edited":
-                income_plan.apply_weekly_plan(category, direction, week_start_date, total)
+            income_plan.apply_weekly_plan(category, direction, week_start_date, total)
     return count
 
 

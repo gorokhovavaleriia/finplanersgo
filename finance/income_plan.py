@@ -136,6 +136,15 @@ def apply_daily_plan(category, direction, day, amount):
     )
 
 
+def load_daily_plan_map():
+    """{(категория, направление, день) -> сумма} — вся таблица одним
+    запросом (см. load_weekly_plan_map — тот же приём). Используется, чтобы
+    решить, есть ли у недели УЖЕ хоть один явно заданный день — если да,
+    остальные дни этой недели считаются нулём, а не дефолтом от
+    daily_split(), см. views._day_cells и plan_projection.planned_daily_income."""
+    return {(e.category, e.direction, e.day): float(e.amount) for e in IncomeDailyPlan.objects.all()}
+
+
 def load_weekly_plan_map():
     """{(категория, направление, week_start) -> сумма} — вся таблица одним
     запросом. Без этого get_weekly_plan в цикле по колонкам/строкам

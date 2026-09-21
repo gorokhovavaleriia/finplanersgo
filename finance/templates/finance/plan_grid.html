@@ -760,19 +760,6 @@ document.addEventListener('change', function (e) {
         body.set('field', e.target.name);
         body.set('value', e.target.checked ? '1' : '0');
         postIncomePlanField(body).catch(() => {});
-    } else if (e.target.matches('input[type="radio"][name^="mode␟"]')) {
-        // "edited" — разовое действие "поднять план уровня выше до суммы
-        // отредактированных ячеек прямо сейчас" (см. income_plan_save_field);
-        // "current" ничего не сохраняет, план уровня выше просто остаётся как был.
-        if (e.target.value !== 'edited') return;
-        const tr = e.target.closest('tr');
-        const editedSpan = tr ? tr.querySelector('.edited-total') : null;
-        const total = editedSpan ? parseMoneyInput(editedSpan.textContent) : 0;
-        const body = new URLSearchParams();
-        body.set('field', e.target.name);
-        body.set('value', 'edited');
-        body.set('total', String(total));
-        postIncomePlanField(body).catch(() => {});
     }
 });
 

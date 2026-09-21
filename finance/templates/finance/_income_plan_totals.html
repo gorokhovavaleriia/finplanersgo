@@ -1,13 +1,3 @@
 {% load finance_extras %}
-<td class="px-2 py-1 text-right tabular-nums">
-    <label class="inline-flex items-center gap-1 justify-end w-full cursor-pointer" title="Оставить {% if kind == 'week' %}недельный{% else %}месячный{% endif %} план как был">
-        <input type="radio" name="{{ obj.mode_field_name }}" value="current" checked>
-        <span>{{ obj.current_total|money0 }}</span>
-    </label>
-</td>
-<td class="px-2 py-1 text-right tabular-nums">
-    <label class="inline-flex items-center gap-1 justify-end w-full cursor-pointer" title="Поднять {% if kind == 'week' %}недельный{% else %}месячный{% endif %} план до суммы отредактированных ячеек">
-        <input type="radio" name="{{ obj.mode_field_name }}" value="edited">
-        <span class="edited-total">{{ obj.edited_total|money0 }}</span>
-    </label>
-</td>
+<td class="current-total px-2 py-1 text-right tabular-nums bg-gray-100">{{ obj.current_total|money0 }}</td>
+<td class="px-2 py-1 text-right tabular-nums bg-gray-100"><span class="edited-total">{{ obj.edited_total|money0 }}</span></td>
