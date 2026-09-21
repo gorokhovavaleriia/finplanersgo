@@ -1,4 +1,6 @@
 asgiref==3.11.1
+gunicorn==23.0.0
+packaging==26.3
 certifi==2026.7.22
 charset-normalizer==3.5.1
 Django==4.2.30

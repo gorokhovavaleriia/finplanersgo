@@ -107,11 +107,15 @@ WSGI_APPLICATION = 'kiwiweb.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
+# На Amvera файловая система контейнера пересоздаётся при каждом деплое —
+# переживает только persistenceMount (/data, см. amvera.yaml). Поэтому путь
+# к db.sqlite3 настраиваемый: DJANGO_DB_PATH задаётся только там, локально
+# и на PythonAnywhere её нет — база остаётся в корне проекта, как раньше.
 
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': os.environ.get('DJANGO_DB_PATH', str(BASE_DIR / 'db.sqlite3')),
     }
 }
 
