@@ -671,10 +671,24 @@ def _week_has_daily_data_cached(daily_map, group, category, sub_key, dir_key, we
 
 def _expense_day_cells(daily_map, group, category, subcategory, direction, week_start, weekly_total):
     """[{value, field_name}, ...] на 7 дней недели — дневной override, если
-    его правили отдельно, иначе недельный план поровну на 7 дней (у
-    расходов, в отличие от поступлений, дней недели не бывает)."""
+    его правили отдельно.
+
+    Для дня БЕЗ своего значения: если у этой строки (группа/категория/
+    подкатегория/направление) в этой неделе уже есть ХОТЯ БЫ один явно
+    заданный день — 0, а не "неделя/7". Иначе (неделю ещё не разворачивали
+    по дням вообще) — "неделя/7", как разумное стартовое значение. Без
+    этого разделения после первой же правки одного дня у ВСЕХ остальных,
+    ещё не тронутых дней "из ниоткуда" менялся плейсхолдер (недельная сумма
+    выросла — вырос и "неделя/7"), хотя реально в базе для них ничего не
+    сохранено; ровно так уже устроен plan_projection.planned_daily_fund_expense
+    (см. её докстринг) — эта функция просто отражала старую, рассинхронизированную
+    с ним логику."""
     dir_key = _dir_key(direction)
-    default_v = (weekly_total or 0.0) / 7.0
+    has_daily_data = any(
+        (group, category, subcategory or "", dir_key, week_start + timedelta(days=i)) in daily_map
+        for i in range(7)
+    )
+    default_v = 0.0 if has_daily_data else (weekly_total or 0.0) / 7.0
     out = []
     for i in range(7):
         d = week_start + timedelta(days=i)
