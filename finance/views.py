@@ -1319,6 +1319,20 @@ def plan_save(request, week_start):
         if total:
             expense_plan.apply_weekly_plan(group, category, subcategory, "", week_start_date, float(total))
 
+    # Месячную сумму (год выше) тоже держим суммой недель этого месяца — та
+    # же синхронизация, что и в plan_save_field/PLANDAY.
+    week_end_date = week_start_date + timedelta(days=6)
+    months_touched = {(week_start_date.year, week_start_date.month), (week_end_date.year, week_end_date.month)}
+    synced = set()
+    for group, category, subcategory, direction in day_sums:
+        for y, m in months_touched:
+            expense_plan.sync_monthly_from_weeks(group, category, subcategory, direction, y, m)
+            synced.add((group, category, subcategory, y, m))
+    for group, category, subcategory in touched_categories:
+        for y, m in months_touched:
+            if (group, category, subcategory, y, m) not in synced:
+                expense_plan.sync_monthly_from_weeks(group, category, subcategory, "", y, m)
+
     messages.success(request, "План сохранён")
     return redirect(request.POST.get("next") or "income")
 
@@ -1433,9 +1447,19 @@ def plan_save_field(request):
             v = expense_plan.get_daily_plan(group, category, subcategory, direction, week_start_date + timedelta(days=i))
             week_total += v or 0.0
         expense_plan.apply_weekly_plan(group, category, subcategory, direction, week_start_date, week_total)
+        # Месячную сумму (год выше) тоже держим суммой недель этого месяца
+        # — та же синхронизация, что и при прямой правке недели (см.
+        # PLANWEEK-ветку выше), просто теперь неделя обновилась не прямой
+        # правкой, а поднятием из дня.
+        week_end_date = week_start_date + timedelta(days=6)
+        months_touched = {(week_start_date.year, week_start_date.month), (week_end_date.year, week_end_date.month)}
+        for y, m in months_touched:
+            expense_plan.sync_monthly_from_weeks(group, category, subcategory, direction, y, m)
         payload = {"ok": True}
         if direction:
             expense_plan.recompute_category_weekly(group, category, subcategory, week_start_date)
+            for y, m in months_touched:
+                expense_plan.sync_monthly_from_weeks(group, category, subcategory, "", y, m)
             cat_stored = expense_plan.get_daily_plan(group, category, subcategory, "", day)
             if cat_stored is None:
                 cat_week_total = expense_plan.get_weekly_plan(group, category, subcategory, "", week_start_date)
@@ -1574,6 +1598,13 @@ def income_plan_save_field(request):
                 v = income_plan.get_daily_plan(category, direction, week_start_date + timedelta(days=i))
                 week_total += v or 0.0
             income_plan.apply_weekly_plan(category, direction, week_start_date, week_total)
+            # Месячную сумму (год выше) тоже держим суммой недель этого
+            # месяца — та же синхронизация, что и при прямой правке недели
+            # (см. kind == "month" выше), просто неделя обновилась не
+            # прямой правкой, а поднятием из дня.
+            week_end_date = week_start_date + timedelta(days=6)
+            for y, m in {(week_start_date.year, week_start_date.month), (week_end_date.year, week_end_date.month)}:
+                income_plan.sync_monthly_from_weeks(category, direction, y, m)
         else:
             return JsonResponse({"ok": False, "error": "bad kind"}, status=400)
         return JsonResponse({"ok": True})
@@ -1943,8 +1974,12 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
             income_plan.apply_daily_plan(category, direction, date.fromisoformat(day_str), value)
             weekly_sums[(category, direction)] = weekly_sums.get((category, direction), 0.0) + value
             count += 1
+        week_end_date = week_start_date + timedelta(days=6)
+        months_touched = {(week_start_date.year, week_start_date.month), (week_end_date.year, week_end_date.month)}
         for (category, direction), total in weekly_sums.items():
             income_plan.apply_weekly_plan(category, direction, week_start_date, total)
+            for y, m in months_touched:
+                income_plan.sync_monthly_from_weeks(category, direction, y, m)
     return count
 
 
