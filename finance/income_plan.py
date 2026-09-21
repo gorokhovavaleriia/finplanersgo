@@ -83,18 +83,27 @@ def _week_income_from_months(category, direction, week_start, week_end):
 def apply_monthly_plan(category, direction, year, month, amount):
     """Сохраняет месячный план и пересчитывает недели этого месяца (и,
     если задевает граница, соседних месяцев тоже — их недели, попавшие в
-    этот месяц, могли измениться)."""
+    этот месяц, могли измениться) — а также дни внутри каждой такой недели
+    (redistribute_week_to_days). Без этого правка месяца "сверху" (например,
+    обнуление) останавливалась на неделях: если у недели уже была своя
+    дневная разбивка, старые дни оставались как были, и именно в них
+    смотрят дневной вид и planned_daily_income (предпочитает явные дни
+    недельной сумме, если они есть) — снаружи казалось бы, что обнуление
+    ничего не стёрло. Подтверждение перезаписи уже спросили на клиенте."""
     direction = direction or ""
     IncomeMonthlyPlan.objects.update_or_create(
         category=category, direction=direction, year=year, month=month,
         defaults={"amount": amount},
     )
+    weekend_flags = load_weekend_flags()
+    works_weekends = weekend_flags.get((category, direction), False)
     for week_start, week_end in aggregate.month_weeks(year, month):
         total = _week_income_from_months(category, direction, week_start, week_end)
         IncomePlanEntry.objects.update_or_create(
             category=category, direction=direction, week_start=week_start,
             defaults={"amount": total},
         )
+        redistribute_week_to_days(category, direction, week_start, total, works_weekends)
 
 
 def apply_weekly_plan(category, direction, week_start, amount):

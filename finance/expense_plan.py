@@ -60,7 +60,15 @@ def _week_amount_from_months(group, category, subcategory, direction, week_start
 
 def apply_monthly_plan(group, category, subcategory, direction, year, month, amount):
     """Сохраняет месячный план и пересчитывает недели этого месяца (и,
-    если задевает граница, соседних месяцев тоже)."""
+    если задевает граница, соседних месяцев тоже) — а также дни внутри
+    каждой такой недели (redistribute_week_to_days). Без этого правка
+    месяца "сверху" (например, обнуление) останавливалась на неделях: если
+    у недели уже была своя дневная разбивка (её кто-то вводил отдельно),
+    старые дни оставались как были, и именно в них смотрит дневной вид и
+    проекция остатка (planned_daily_fund_expense — предпочитает явные дни
+    недельной сумме, если они есть) — снаружи казалось бы, что обнуление
+    ничего не стёрло. Подтверждение перезаписи уже спросили на клиенте
+    (см. plan_grid.html, data-has-lower у месячных ячеек)."""
     ExpenseMonthlyPlan.objects.update_or_create(
         group=group, category=category, subcategory=subcategory, direction=direction, year=year, month=month,
         defaults={"amount": amount},
@@ -71,6 +79,7 @@ def apply_monthly_plan(group, category, subcategory, direction, year, month, amo
             group=group, category=category, subcategory=subcategory, direction=direction, week_start=week_start,
             defaults={"amount": total},
         )
+        redistribute_week_to_days(group, category, subcategory, direction, week_start, total)
 
 
 def get_monthly_plan(group, category, subcategory, direction, year, month):
