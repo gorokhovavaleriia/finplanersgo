@@ -11,8 +11,15 @@ Excel-вариант, см. finance.logic.operations.read_operations), чтоб�
 
 from datetime import date, datetime
 
+from django.db import transaction
+
 from .fintablo import list_categories, list_directions, list_transactions
 from .models import Operation
+
+# Для bulk_update — сколько строк отправлять в одном SQL-запросе. Sqlite
+# по умолчанию ограничивает запрос ~999 параметрами, а тут на строку уходит
+# 7 полей + id; 100 строк — с большим запасом.
+UPDATE_BATCH_SIZE = 100
 
 # "Полная" синхронизация (без явных дат) не тянет вообще всю историю
 # Финтабло (там она уходит в 2021 год и на порядок замедляет каждую
@@ -74,7 +81,12 @@ def sync_operations(date_from=None, date_to=None):
     Старые вручную загруженные из Excel операции (source=excel) в том же
     периоде тоже удаляются — иначе одна и та же реальная операция посчитается
     дважды (раз из Excel, раз из API). Переход на API — это замена Excel, не
-    параллельный источник; см. обсуждение при первом внедрении синхронизации."""
+    параллельный источник; см. обсуждение при первом внедрении синхронизации.
+
+    Пишет пачками (bulk_create/bulk_update), а не по одной операции —
+    на нескольких месяцах истории отдельный SELECT+INSERT/UPDATE+commit на
+    каждую запись легко превышает таймаут веб-сервера (так и вышло на
+    Amvera — gunicorn убивал воркер посреди синхронизации)."""
     category_names = _category_name_map(list_categories())
     direction_names = _direction_name_map(list_directions())
 
@@ -82,8 +94,8 @@ def sync_operations(date_from=None, date_to=None):
     date_to_str = date_to.strftime("%d.%m.%Y") if date_to else None
     items = list_transactions(date_from_str, date_to_str)
 
+    rows = []
     seen_external_ids = set()
-    created = updated = 0
     for item in _expand_splits(items):
         if item.get("group") not in IMPORTED_GROUPS or item.get("isPlan"):
             continue
@@ -96,35 +108,53 @@ def sync_operations(date_from=None, date_to=None):
         value = float(item.get("value") or 0)
         amount = -value if item["group"] == "outcome" else value
 
-        _obj, was_created = Operation.objects.update_or_create(
-            external_id=external_id,
-            defaults={
-                "date": datetime.strptime(item["date"], "%d.%m.%Y").date(),
-                "amount": amount,
-                "statya": statya,
-                "rod_statya": rod_statya,
-                "direction": direction,
-                "description": item.get("description") or "",
-                "source": Operation.SOURCE_FINTABLO_API,
-            },
+        rows.append({
+            "external_id": external_id,
+            "date": datetime.strptime(item["date"], "%d.%m.%Y").date(),
+            "amount": amount,
+            "statya": statya,
+            "rod_statya": rod_statya,
+            "direction": direction,
+            "description": item.get("description") or "",
+        })
+
+    update_fields = ["date", "amount", "statya", "rod_statya", "direction", "description"]
+
+    with transaction.atomic():
+        existing = {
+            op.external_id: op
+            for op in Operation.objects.filter(external_id__in=seen_external_ids)
+        }
+
+        to_create = []
+        to_update = []
+        for row in rows:
+            existing_op = existing.get(row["external_id"])
+            if existing_op is None:
+                to_create.append(Operation(source=Operation.SOURCE_FINTABLO_API, **row))
+            else:
+                for field in update_fields:
+                    setattr(existing_op, field, row[field])
+                existing_op.source = Operation.SOURCE_FINTABLO_API
+                to_update.append(existing_op)
+
+        Operation.objects.bulk_create(to_create)
+        Operation.objects.bulk_update(to_update, update_fields + ["source"], batch_size=UPDATE_BATCH_SIZE)
+
+        stale_qs = Operation.objects.filter(source=Operation.SOURCE_FINTABLO_API).exclude(
+            external_id__in=seen_external_ids
         )
-        created += was_created
-        updated += not was_created
+        if date_from:
+            stale_qs = stale_qs.filter(date__gte=date_from)
+        if date_to:
+            stale_qs = stale_qs.filter(date__lte=date_to)
+        deleted_api, _ = stale_qs.delete()
 
-    stale_qs = Operation.objects.filter(source=Operation.SOURCE_FINTABLO_API).exclude(
-        external_id__in=seen_external_ids
-    )
-    if date_from:
-        stale_qs = stale_qs.filter(date__gte=date_from)
-    if date_to:
-        stale_qs = stale_qs.filter(date__lte=date_to)
-    deleted_api, _ = stale_qs.delete()
+        excel_qs = Operation.objects.filter(source=Operation.SOURCE_EXCEL)
+        if date_from:
+            excel_qs = excel_qs.filter(date__gte=date_from)
+        if date_to:
+            excel_qs = excel_qs.filter(date__lte=date_to)
+        deleted_excel, _ = excel_qs.delete()
 
-    excel_qs = Operation.objects.filter(source=Operation.SOURCE_EXCEL)
-    if date_from:
-        excel_qs = excel_qs.filter(date__gte=date_from)
-    if date_to:
-        excel_qs = excel_qs.filter(date__lte=date_to)
-    deleted_excel, _ = excel_qs.delete()
-
-    return created, updated, deleted_api, deleted_excel
+    return len(to_create), len(to_update), deleted_api, deleted_excel
