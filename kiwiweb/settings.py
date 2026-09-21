@@ -51,6 +51,15 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    # Amvera (и PythonAnywhere) завершают HTTPS на своём прокси и
+    # проксируют к gunicorn уже по обычному http — без этой строки Django
+    # думает, что соединение небезопасное (request.is_secure() = False),
+    # и тогда secure-куки (сессия, CSRF) не работают — именно это ломало
+    # вход с "Ошибка проверки CSRF" на Amvera. Безопасно только пока прокси
+    # сам подставляет X-Forwarded-Proto и не даёт его подделать снаружи —
+    # это так и есть у обеих платформ, поэтому включаем только при
+    # DEBUG=False (в проде), не трогая локальный runserver без прокси.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Страница "План" объединяет план расходов (по дням — до ~900 полей на
 # одну неделю) и встроенный план поступлений в одной форме — легко
