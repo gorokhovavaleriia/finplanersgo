@@ -81,9 +81,7 @@
             {% zip3 income_values grand_income_ok columns as income_fact_cols %}
             {% for v, ok, col in income_fact_cols %}
             <td class="px-1 py-1 text-right">
-                <button type="button" class="w-full px-2 py-1 rounded hover:bg-sky-800 tabular-nums {% if ok == True %}text-emerald-300{% elif ok == False %}text-rose-300{% endif %}"
-                    hx-get="{% url 'income_ops' %}?start={{ col.start }}&end={{ col.end }}"
-                    hx-target="#ops-panel" hx-swap="innerHTML">{{ v|money }}</button>
+                <span class="block w-full px-2 py-1 tabular-nums {% if ok == True %}text-emerald-300{% elif ok == False %}text-rose-300{% endif %}">{{ v|money }}</span>
             </td>
             {% endfor %}
             <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ income_total|money0 }}</td>
@@ -198,9 +196,7 @@
             {% zip3 grand_fact grand_fact_ok columns as grand_fact_cols %}
             {% for v, ok, col in grand_fact_cols %}
             <td class="px-1 py-1 text-right">
-                <button type="button" class="w-full px-2 py-1 rounded hover:bg-sky-800 tabular-nums {% if ok == True %}text-emerald-300{% elif ok == False %}text-rose-300{% endif %}"
-                    hx-get="{% url 'expenses_ops' %}?start={{ col.start }}&end={{ col.end }}"
-                    hx-target="#ops-panel" hx-swap="innerHTML">{{ v|money }}</button>
+                <span class="block w-full px-2 py-1 tabular-nums {% if ok == True %}text-emerald-300{% elif ok == False %}text-rose-300{% endif %}">{{ v|money }}</span>
             </td>
             {% endfor %}
             <td class="px-3 py-2 text-right tabular-nums" colspan="{% if kind != 'year' %}3{% endif %}">{{ grand_fact_total|money0 }}</td>
@@ -312,9 +308,7 @@
             {% zip3 row.fact_cells row.fact_ok columns as row_fact_cols %}
             {% for v, ok, col in row_fact_cols %}
             <td class="px-1 py-1 text-right">
-                <button type="button" class="w-full px-2 py-1 rounded hover:bg-gray-200 tabular-nums {% if ok == True %}text-emerald-600{% elif ok == False %}text-rose-600{% endif %}"
-                    hx-get="{% url 'expenses_ops' %}?group={{ group.name|urlencode }}&category={{ row.category|urlencode }}&start={{ col.start }}&end={{ col.end }}"
-                    hx-target="#ops-panel" hx-swap="innerHTML">{{ v|money }}</button>
+                <span class="block w-full px-2 py-1 tabular-nums {% if ok == True %}text-emerald-600{% elif ok == False %}text-rose-600{% endif %}">{{ v|money }}</span>
             </td>
             {% endfor %}
             <td class="px-3 py-2 text-right tabular-nums bg-gray-100" colspan="{% if kind != 'year' %}3{% endif %}">{{ row.fact_total|money0 }}</td>
@@ -360,9 +354,7 @@
             {% zip3 dir.fact_cells dir.fact_ok columns as dir_fact_cols %}
             {% for v, ok, col in dir_fact_cols %}
             <td class="px-1 py-1 text-right">
-                <button type="button" class="w-full px-2 py-1 rounded hover:bg-amber-100 tabular-nums {% if ok == True %}text-emerald-600{% elif ok == False %}text-rose-600{% endif %}"
-                    hx-get="{% url 'expenses_ops' %}?group={{ group.name|urlencode }}&category={{ row.category|urlencode }}&has_direction=1&direction={{ dir.direction|urlencode }}&start={{ col.start }}&end={{ col.end }}"
-                    hx-target="#ops-panel" hx-swap="innerHTML">{{ v|money }}</button>
+                <span class="block w-full px-2 py-1 tabular-nums {% if ok == True %}text-emerald-600{% elif ok == False %}text-rose-600{% endif %}">{{ v|money }}</span>
             </td>
             {% endfor %}
             <td class="px-3 py-2 text-right tabular-nums bg-gray-100" colspan="{% if kind != 'year' %}3{% endif %}">{{ dir.fact_total|money0 }}</td>
@@ -397,8 +389,6 @@
 <p class="text-sm text-gray-500 mt-3">Если разворачиваете категорию по направлениям и заполняете план там — итог по категории пересчитается как сумма направлений.</p>
 <button type="submit" class="mt-2 bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">💾 Сохранить план</button>
 </form>
-
-<div id="ops-panel" class="mt-6"></div>
 
 <script>
 // Развёрнутость групп/категорий запоминается в localStorage, чтобы не

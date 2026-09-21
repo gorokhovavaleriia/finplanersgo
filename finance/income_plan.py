@@ -136,16 +136,36 @@ def apply_daily_plan(category, direction, day, amount):
     )
 
 
-def get_weekly_plan(category, direction, week_start):
+def load_weekly_plan_map():
+    """{(категория, направление, week_start) -> сумма} — вся таблица одним
+    запросом. Без этого get_weekly_plan в цикле по колонкам/строкам
+    (planned_daily_income, _income_plan_table_month/_week) дёргал отдельный
+    SELECT на каждую ячейку — на годовой вид это тысячи запросов, основная
+    причина медленной загрузки и зависания при сохранении страницы "План"."""
+    return {(e.category, e.direction, e.week_start): float(e.amount) for e in IncomePlanEntry.objects.all()}
+
+
+def load_monthly_plan_map():
+    """То же самое, но для IncomeMonthlyPlan (годовой вид) — см. load_weekly_plan_map."""
+    return {(e.category, e.direction, e.year, e.month): float(e.amount) for e in IncomeMonthlyPlan.objects.all()}
+
+
+def get_weekly_plan(category, direction, week_start, plan_map=None):
+    direction = direction or ""
+    if plan_map is not None:
+        return plan_map.get((category, direction, week_start), 0.0)
     try:
-        return float(IncomePlanEntry.objects.get(category=category, direction=direction or "", week_start=week_start).amount)
+        return float(IncomePlanEntry.objects.get(category=category, direction=direction, week_start=week_start).amount)
     except IncomePlanEntry.DoesNotExist:
         return 0.0
 
 
-def get_monthly_plan(category, direction, year, month):
+def get_monthly_plan(category, direction, year, month, plan_map=None):
+    direction = direction or ""
+    if plan_map is not None:
+        return plan_map.get((category, direction, year, month), 0.0)
     try:
-        return float(IncomeMonthlyPlan.objects.get(category=category, direction=direction or "", year=year, month=month).amount)
+        return float(IncomeMonthlyPlan.objects.get(category=category, direction=direction, year=year, month=month).amount)
     except IncomeMonthlyPlan.DoesNotExist:
         return 0.0
 

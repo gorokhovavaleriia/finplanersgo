@@ -572,6 +572,12 @@ def _plan_context(request, kind, year, month=None, week=None):
     monthly_plan_map = _load_expense_monthly_map(year)
     fund_balances = expenses.load_fund_balances()
     weekend_flags = income_plan.load_weekend_flags()
+    # Один запрос на весь план поступлений вместо SELECT на каждую ячейку —
+    # см. income_plan.load_weekly_plan_map, используется и в проекции
+    # остатка (planned_daily_income/planned_daily_balances ниже), и во
+    # встроенном блоке "Планирование поступлений" (_income_plan_table_*).
+    income_weekly_plan_map = income_plan.load_weekly_plan_map()
+    income_monthly_plan_map = income_plan.load_monthly_plan_map()
 
     if kind == "year":
         _rows, columns, data = aggregate.expense_year_table(classified, rows, year)
@@ -592,6 +598,7 @@ def _plan_context(request, kind, year, month=None, week=None):
     full_daily_planned_income = plan_projection.planned_daily_income(
         classified, income_categories, weekend_flags,
         period_ranges[0][0] if period_ranges else date.today(), period_end_overall,
+        weekly_plan_map=income_weekly_plan_map,
     )
     planned_income_values = [_sum_days(full_daily_planned_income, s, e) for s, e in period_ranges]
     settled_col = [fund_balance.DISTRIBUTION_START <= end <= latest_op_date for _s, end in period_ranges]
@@ -878,6 +885,7 @@ def _plan_context(request, kind, year, month=None, week=None):
     # последней датой факта — это прогноз, ему можно "заглядывать вперёд".
     planned_daily_balances = plan_projection.planned_daily_balances(
         classified, income_categories, weekend_flags, all_funds, period_end_overall, transfer_deltas,
+        weekly_plan_map=income_weekly_plan_map,
     )
     for group_ref in groups:
         fund = group_ref["name"]
@@ -918,9 +926,13 @@ def _plan_context(request, kind, year, month=None, week=None):
     # nav_url в колонках не нужен — переход по периодам уже даёт сама
     # страница "План", дублировать его тут незачем.
     if kind == "year":
-        income_plan_result = _income_plan_table_year(classified, income_categories, weekend_flags, year, with_nav=False)
+        income_plan_result = _income_plan_table_year(
+            classified, income_categories, weekend_flags, year, with_nav=False, monthly_plan_map=income_monthly_plan_map,
+        )
     elif kind == "month":
-        income_plan_result = _income_plan_table_month(classified, income_categories, weekend_flags, year, month, with_nav=False)
+        income_plan_result = _income_plan_table_month(
+            classified, income_categories, weekend_flags, year, month, with_nav=False, weekly_plan_map=income_weekly_plan_map,
+        )
     else:
         income_plan_result = _income_plan_table_week(classified, income_categories, weekend_flags, week[0])
 
@@ -984,6 +996,12 @@ def plan_save_year(request, year):
 
     count = _apply_income_plan_post(request, "year", year=year)
 
+    # Один запрос на весь месячный план года вместо SELECT на каждое из
+    # ~тысячи отправленных полей формы — раньше именно это, а не сама
+    # запись изменений, было причиной зависания при сохранении годового
+    # плана (см. _load_expense_monthly_map).
+    monthly_plan_map = _load_expense_monthly_map(year)
+
     dir_sums = {}
     changed = []
     for key, raw_value in request.POST.items():
@@ -992,7 +1010,7 @@ def plan_save_year(request, year):
         _prefix, group, category, subcategory, direction, month_str = key.split(PLAN_FIELD_SEP)
         month_num = int(month_str)
         value = _parse_money(raw_value)
-        current = expense_plan.get_monthly_plan(group, category, subcategory, direction, year, month_num)
+        current = monthly_plan_map.get((group, category, subcategory, direction, month_num), 0.0)
         if value != current:
             changed.append((group, category, subcategory, direction, month_num, value))
         if direction:
@@ -1003,7 +1021,7 @@ def plan_save_year(request, year):
         expense_plan.apply_monthly_plan(group, category, subcategory, direction, year, month_num, value)
 
     for (group, category, subcategory, month_num), total in dir_sums.items():
-        current = expense_plan.get_monthly_plan(group, category, subcategory, "", year, month_num)
+        current = monthly_plan_map.get((group, category, subcategory, "", month_num), 0.0)
         if total and total != current:
             expense_plan.apply_monthly_plan(group, category, subcategory, "", year, month_num, total)
 
@@ -1026,6 +1044,10 @@ def plan_save_month(request, year, month):
 
     _apply_income_plan_post(request, "month", year=year, month=month)
 
+    # Тот же приём, что и в plan_save_year — весь недельный план одним
+    # запросом вместо SELECT на каждое поле формы, см. _load_plan_map.
+    plan_map = _load_plan_map()
+
     dir_sums = {}
     changed = []
     for key, raw_value in request.POST.items():
@@ -1034,7 +1056,7 @@ def plan_save_month(request, year, month):
         _prefix, group, category, subcategory, direction, week_start_str = key.split(PLAN_FIELD_SEP)
         week_start_date = date.fromisoformat(week_start_str)
         value = _parse_money(raw_value)
-        current = expense_plan.get_weekly_plan(group, category, subcategory, direction, week_start_date)
+        current = plan_map.get((group, category, subcategory, direction, week_start_date), 0.0)
         if value != current:
             changed.append((group, category, subcategory, direction, week_start_date, value))
         if direction:
@@ -1046,7 +1068,7 @@ def plan_save_month(request, year, month):
         expense_plan.redistribute_week_to_days(group, category, subcategory, direction, week_start_date, value)
 
     for (group, category, subcategory, week_start_date), total in dir_sums.items():
-        current = expense_plan.get_weekly_plan(group, category, subcategory, "", week_start_date)
+        current = plan_map.get((group, category, subcategory, "", week_start_date), 0.0)
         if total and total != current:
             expense_plan.apply_weekly_plan(group, category, subcategory, "", week_start_date, total)
             expense_plan.redistribute_week_to_days(group, category, subcategory, "", week_start_date, total)
@@ -1280,8 +1302,10 @@ def _income_plan_rows(classified, income_categories, weekend_flags):
     return out
 
 
-def _income_plan_table_year(classified, income_categories, weekend_flags, year, with_nav=True):
+def _income_plan_table_year(classified, income_categories, weekend_flags, year, with_nav=True, monthly_plan_map=None):
     cat_rows = _income_plan_rows(classified, income_categories, weekend_flags)
+    if monthly_plan_map is None:
+        monthly_plan_map = income_plan.load_monthly_plan_map()
 
     columns = [{"label": aggregate.MONTH_NAMES[m - 1], "month": m} for m in range(1, 13)]
     if with_nav:
@@ -1298,7 +1322,7 @@ def _income_plan_table_year(classified, income_categories, weekend_flags, year, 
             d_cells = []
             d_total = 0.0
             for col in columns:
-                v = income_plan.get_monthly_plan(category, _dir_key(direction), year, col["month"])
+                v = income_plan.get_monthly_plan(category, _dir_key(direction), year, col["month"], plan_map=monthly_plan_map)
                 d_cells.append({"value": v, "field_name": income_plan_field_name(category, direction, col["month"])})
                 d_total += v
             dir_rows.append({
@@ -1318,10 +1342,10 @@ def _income_plan_table_year(classified, income_categories, weekend_flags, year, 
                 # старое значение (введённое раньше, до разбивки по
                 # направлениям), чтобы оно не пропало из вида молча
                 dir_sum = sum(dr["cells"][idx]["value"] for dr in dir_rows)
-                value = dir_sum or income_plan.get_monthly_plan(category, None, year, col["month"])
+                value = dir_sum or income_plan.get_monthly_plan(category, None, year, col["month"], plan_map=monthly_plan_map)
                 cells.append({"value": value, "editable": False})
             else:
-                value = income_plan.get_monthly_plan(category, None, year, col["month"])
+                value = income_plan.get_monthly_plan(category, None, year, col["month"], plan_map=monthly_plan_map)
                 cells.append({"value": value, "editable": True, "field_name": income_plan_field_name(category, None, col["month"])})
             row_total += value
             col_totals[idx] += value
@@ -1349,8 +1373,10 @@ def income_plan_year(request, year):
     return render(request, "finance/income_plan_grid.html", ctx)
 
 
-def _income_plan_table_month(classified, income_categories, weekend_flags, year, month, with_nav=True):
+def _income_plan_table_month(classified, income_categories, weekend_flags, year, month, with_nav=True, weekly_plan_map=None):
     cat_rows = _income_plan_rows(classified, income_categories, weekend_flags)
+    if weekly_plan_map is None:
+        weekly_plan_map = income_plan.load_weekly_plan_map()
 
     weeks = aggregate.month_weeks(year, month)
     columns = [{"label": f"{s:%d.%m}–{e:%d.%m}", "start": s, "end": e} for s, e in weeks]
@@ -1365,7 +1391,7 @@ def _income_plan_table_month(classified, income_categories, weekend_flags, year,
             d_cells = []
             d_total = 0.0
             for col in columns:
-                v = income_plan.get_weekly_plan(category, _dir_key(direction), col["start"])
+                v = income_plan.get_weekly_plan(category, _dir_key(direction), col["start"], plan_map=weekly_plan_map)
                 d_cells.append({"value": v, "editable": True, "field_name": income_plan_field_name(category, direction, col["start"].isoformat())})
                 d_total += v
             dir_rows.append({
@@ -1387,10 +1413,10 @@ def _income_plan_table_month(classified, income_categories, weekend_flags, year,
                 # старое значение (введённое раньше, до разбивки по
                 # направлениям), чтобы оно не пропало из вида молча
                 dir_sum = sum(dr["cells"][idx]["value"] for dr in dir_rows)
-                value = dir_sum or income_plan.get_weekly_plan(category, None, col["start"])
+                value = dir_sum or income_plan.get_weekly_plan(category, None, col["start"], plan_map=weekly_plan_map)
                 cells.append({"value": value, "editable": False})
             else:
-                value = income_plan.get_weekly_plan(category, None, col["start"])
+                value = income_plan.get_weekly_plan(category, None, col["start"], plan_map=weekly_plan_map)
                 cells.append({"value": value, "editable": True, "field_name": income_plan_field_name(category, None, col["start"].isoformat())})
             row_total += value
             col_totals[idx] += value
