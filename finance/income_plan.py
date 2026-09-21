@@ -122,6 +122,25 @@ def redistribute_week_to_days(category, direction, week_start, amount, works_wee
             apply_daily_plan(category, direction, day, value)
 
 
+def sync_monthly_from_weeks(category, direction, year, month):
+    """Пересчитывает месячную сумму (IncomeMonthlyPlan) как сумму ВСЕХ
+    недель этого месяца (aggregate.month_weeks) — вызывается после правки
+    любой отдельной недели в месячном виде, чтобы месяц всегда оставался
+    суммой того, что видно по неделям, а не отдельной, разъезжающейся с
+    ними цифрой (тот же принцип, что и апдейт недели из суммы дней в
+    redistribute_week_to_days/apply_daily_plan-цепочке, только уровнем
+    выше). В отличие от apply_monthly_plan (та, наоборот, разносит месяц ПО
+    неделям), сами недели не трогает — только читает и складывает."""
+    total = sum(
+        get_weekly_plan(category, direction, week_start)
+        for week_start, _week_end in aggregate.month_weeks(year, month)
+    )
+    IncomeMonthlyPlan.objects.update_or_create(
+        category=category, direction=direction or "", year=year, month=month,
+        defaults={"amount": total},
+    )
+
+
 def week_has_daily_data(category, direction, week_start):
     """Есть ли у этой недели уже свои дневные данные — если да, правка
     недели "сверху" должна сначала спросить подтверждение (см.

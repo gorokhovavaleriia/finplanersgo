@@ -1514,6 +1514,13 @@ def income_plan_save_field(request):
             # если внизу были свои дневные данные (см. plan-cascade-input).
             works_weekends = income_plan.load_weekend_flags().get((category, direction), False)
             income_plan.redistribute_week_to_days(category, direction, week_start_date, value, works_weekends)
+            # И месячную сумму (год выше) тоже держим суммой недель этого
+            # месяца — иначе правка недели в месячном виде осталась бы не
+            # видна в годовом (та же логика, только уровнем выше).
+            year = int(request.POST.get("year", 0))
+            month = int(request.POST.get("month", 0))
+            if year and month:
+                income_plan.sync_monthly_from_weeks(category, direction, year, month)
         elif kind == "week":
             day = date.fromisoformat(suffix)
             week_start_date = day - timedelta(days=day.weekday())
@@ -1872,12 +1879,14 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
             income_plan.apply_monthly_plan(category, direction, year, int(month_str), value)
             count += 1
     elif kind == "month":
-        # Недели сохраняются как введены — месячный план (уровень выше) не
-        # трогаем совсем, см. докстринг выше. Дневную разбивку недели тоже
+        # Недели сохраняются как введены. Дневную разбивку недели тоже
         # обновляем (redistribute_week_to_days) — иначе она останется от
         # старой суммы и разъедется с plan_projection.planned_daily_income,
-        # см. комментарий в income_plan_save_field.
+        # см. комментарий в income_plan_save_field. Месячную сумму (год
+        # выше) — тем же принципом, сумма недель этого месяца, а не сама по
+        # себе, см. sync_monthly_from_weeks.
         weekend_flags = income_plan.load_weekend_flags()
+        touched = set()
         for key, raw_value in request.POST.items():
             if not key.startswith(IPLAN_PREFIX):
                 continue
@@ -1887,7 +1896,10 @@ def _apply_income_plan_post(request, kind, year=None, month=None, week_start_dat
             income_plan.apply_weekly_plan(category, direction, week_start_date, value)
             works_weekends = weekend_flags.get((category, direction), False)
             income_plan.redistribute_week_to_days(category, direction, week_start_date, value, works_weekends)
+            touched.add((category, direction))
             count += 1
+        for category, direction in touched:
+            income_plan.sync_monthly_from_weeks(category, direction, year, month)
     else:  # week
         # Каждый день сохраняется отдельно (IncomeDailyPlan), и сумма
         # изменившихся строк сразу поднимается в недельный план (без

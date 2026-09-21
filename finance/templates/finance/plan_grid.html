@@ -726,6 +726,8 @@ async function autosaveIncomeField(inp) {
     body.set('value', inp.value);
     body.set('kind', planForm.dataset.kind);
     body.set('year', planForm.dataset.year);
+    if (planForm.dataset.month) body.set('month', planForm.dataset.month);
+    if (planForm.dataset.weekStart) body.set('week_start', planForm.dataset.weekStart);
 
     inp.classList.add('opacity-50');
     try {
