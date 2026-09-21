@@ -32,6 +32,7 @@ urlpatterns = [
     path("plan/save-month/<int:year>/<int:month>/", views.plan_save_month, name="plan_save_month"),
     path("plan/save/<str:week_start>/", views.plan_save, name="plan_save"),
     path("plan/save-field/", views.plan_save_field, name="plan_save_field"),
+    path("income-plan/save-field/", views.income_plan_save_field, name="income_plan_save_field"),
 
     # Планирование поступлений
     path("income-plan/", views.income_plan_default, name="income_plan"),

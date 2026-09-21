@@ -982,7 +982,7 @@ def _plan_context(request, kind, year, month=None, week=None):
         income_plan_result = _income_plan_table_week(classified, income_categories, weekend_flags, week[0])
 
     ctx = {
-        "kind": kind, "year": year, "columns": col_meta, "groups": groups,
+        "kind": kind, "year": year, "month": month, "columns": col_meta, "groups": groups,
         "grand_fact": grand_fact, "grand_fact_total": sum(grand_fact), "grand_fact_ok": grand_fact_ok,
         "grand_plan": grand_plan if kind != "week" else None, "grand_plan_total": grand_plan_total,
         "income_values": income_values, "income_total": sum(income_values), "grand_income_ok": grand_income_ok,
@@ -1308,6 +1308,67 @@ def income_plan_mode_field_name(category, direction):
     (недели/месяца) — "current" — только явный выбор "edited" поднимает
     сумму отредактированных ячеек вверх при сохранении."""
     return IPLAN_SEP.join(["mode", category, _dir_key(direction)])
+
+
+@login_required
+def income_plan_save_field(request):
+    """Мгновенное сохранение ОДНОГО поля плана поступлений — значения
+    месяца/недели/дня, чекбокса "без выходных" или переключателя "поднять
+    план" — тот же принцип, что и plan_save_field для расходов (см. её
+    докстринг), чтобы для встроенного блока "Планирование поступлений" на
+    странице "План" тоже можно было убрать общую кнопку "Сохранить план".
+
+    kind ("year"/"month"/"week") передаёт клиент — он и так знает, на какой
+    странице находится; без него "iplan␟категория␟направление␟суффикс" был
+    бы неоднозначен (суффикс — то месяц 1-12, то дата недели/дня)."""
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "method"}, status=405)
+
+    field = request.POST.get("field", "")
+    kind = request.POST.get("kind", "")
+    parts = field.split(IPLAN_SEP)
+
+    if field.startswith(f"weekend{IPLAN_SEP}") and len(parts) == 3:
+        _prefix, category, direction = parts
+        income_plan.set_weekend_flag(category, direction, request.POST.get("value") == "1")
+        return JsonResponse({"ok": True})
+
+    if field.startswith(IPLAN_PREFIX) and len(parts) == 4:
+        _prefix, category, direction, suffix = parts
+        value = _parse_money(request.POST.get("value", ""))
+        if kind == "year":
+            year = int(request.POST.get("year", 0))
+            income_plan.apply_monthly_plan(category, direction, year, int(suffix), value)
+        elif kind == "month":
+            income_plan.apply_weekly_plan(category, direction, date.fromisoformat(suffix), value)
+        elif kind == "week":
+            income_plan.apply_daily_plan(category, direction, date.fromisoformat(suffix), value)
+        else:
+            return JsonResponse({"ok": False, "error": "bad kind"}, status=400)
+        return JsonResponse({"ok": True})
+
+    if field.startswith(f"mode{IPLAN_SEP}") and len(parts) == 3:
+        # Выбор "edited" — разовое действие "поднять план уровня выше до
+        # суммы отредактированных ячеек прямо сейчас" (см. income_plan_mode_field_name);
+        # переключатель не хранится между заходами — шаблон всегда рисует
+        # "current" отмеченным, так было и раньше, до автосохранения.
+        # Выбор "current" ничего не делает — план уровня выше просто
+        # остаётся тем, каким был.
+        _prefix, category, direction = parts
+        if request.POST.get("value") == "edited":
+            total = _parse_money(request.POST.get("total", "0"))
+            if kind == "month":
+                year = int(request.POST.get("year", 0))
+                month = int(request.POST.get("month", 0))
+                income_plan.set_monthly_plan_total(category, direction, year, month, total)
+            elif kind == "week":
+                week_start_date = date.fromisoformat(request.POST.get("week_start", ""))
+                income_plan.apply_weekly_plan(category, direction, week_start_date, total)
+            else:
+                return JsonResponse({"ok": False, "error": "bad kind"}, status=400)
+        return JsonResponse({"ok": True})
+
+    return JsonResponse({"ok": False, "error": "unknown field"}, status=400)
 
 
 def _save_weekend_flags(request, classified, income_categories):

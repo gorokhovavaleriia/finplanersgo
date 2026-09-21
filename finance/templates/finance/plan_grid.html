@@ -47,7 +47,10 @@
     }
 </style>
 
-<form method="post" action="{{ save_url }}" id="plan-form" data-year="{{ year }}" data-save-field-url="{% url 'plan_save_field' %}">
+<form method="post" action="{{ save_url }}" id="plan-form" data-year="{{ year }}" data-save-field-url="{% url 'plan_save_field' %}"
+      data-kind="{{ kind }}" data-month="{{ month|default_if_none:'' }}" data-week-start="{{ week_start_for_input|default_if_none:'' }}"
+      data-save-income-field-url="{% url 'income_plan_save_field' %}"
+      onsubmit="return false;">
 {% csrf_token %}
 <input type="hidden" name="next" value="{{ request.path }}">
 
@@ -387,7 +390,7 @@
 </div>
 
 <p class="text-sm text-gray-500 mt-3">Если разворачиваете категорию по направлениям и заполняете план там — итог по категории пересчитается как сумма направлений.</p>
-<button type="submit" class="mt-2 bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">💾 Сохранить план</button>
+<p class="text-sm text-gray-500 mt-1">Каждая ячейка сохраняется сама, как только вы уходите с поля — отдельной кнопки "Сохранить" больше нет.</p>
 </form>
 
 <script>
@@ -565,16 +568,11 @@ function confirmCascadeIfNeeded(inp) {
 }
 
 const planForm = document.getElementById('plan-form');
-if (planForm) {
-    planForm.addEventListener('submit', function () {
-        document.querySelectorAll('input.plan-cascade-input[data-has-lower="true"]').forEach(confirmCascadeIfNeeded);
-    });
-}
 
 // Мгновенное сохранение расходной ячейки при уходе с поля (blur) — без
-// перезагрузки страницы. Кнопка "Сохранить план" никуда не делась и
-// по-прежнему сохраняет всё разом (чекбоксы "без выходных", план
-// поступлений) — это просто более быстрый путь для отдельной цифры.
+// перезагрузки страницы. Плана поступлений (чекбоксы "без выходных",
+// переключатель "поднять план") это тоже касается — см. autosaveIncomeField
+// и обработчик change ниже. Общей кнопки "Сохранить план" больше нет.
 function syncCurrentTotal(tr) {
     const currentCell = tr.querySelector('.current-total');
     const editedSpan = tr.querySelector('.edited-total');
@@ -698,8 +696,84 @@ async function autosavePlanField(inp) {
 document.addEventListener('blur', function (e) {
     if (e.target.matches('input[name^="planmonth␟"], input[name^="planweek␟"], input[name^="planday␟"]')) {
         autosavePlanField(e.target);
+    } else if (e.target.matches('input[name^="iplan␟"]')) {
+        autosaveIncomeField(e.target);
     }
 }, true);
+
+// Автосохранение плана поступлений — та же механика (blur/change без
+// перезагрузки), что и у расходной части выше, только без каскада
+// подтверждения перезаписи (у плана поступлений его никогда не было — см.
+// income_plan_save_field) и без живого пересчёта ячейки категории при
+// правке направления (при разворачивании по направлениям сумма категории
+// просто обновится при следующей перезагрузке страницы — это только
+// отображение, сами данные сохраняются верно сразу).
+async function autosaveIncomeField(inp) {
+    if (inp.value === inp.defaultValue) return;
+
+    const csrfToken = planForm.querySelector('[name=csrfmiddlewaretoken]').value;
+    const body = new URLSearchParams();
+    body.set('field', inp.name);
+    body.set('value', inp.value);
+    body.set('kind', planForm.dataset.kind);
+    body.set('year', planForm.dataset.year);
+
+    inp.classList.add('opacity-50');
+    try {
+        const resp = await fetch(planForm.dataset.saveIncomeFieldUrl, {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+            body: body.toString(),
+        });
+        inp.classList.remove('opacity-50');
+        if (resp.ok) {
+            inp.defaultValue = inp.value;
+            inp.classList.add('ring-2', 'ring-emerald-400');
+            setTimeout(() => inp.classList.remove('ring-2', 'ring-emerald-400'), 800);
+        } else {
+            inp.classList.add('ring-2', 'ring-rose-400');
+        }
+    } catch (e) {
+        inp.classList.remove('opacity-50');
+        inp.classList.add('ring-2', 'ring-rose-400');
+    }
+}
+
+async function postIncomePlanField(body) {
+    const csrfToken = planForm.querySelector('[name=csrfmiddlewaretoken]').value;
+    body.set('kind', planForm.dataset.kind);
+    body.set('year', planForm.dataset.year);
+    if (planForm.dataset.month) body.set('month', planForm.dataset.month);
+    if (planForm.dataset.weekStart) body.set('week_start', planForm.dataset.weekStart);
+    return fetch(planForm.dataset.saveIncomeFieldUrl, {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+        body: body.toString(),
+    });
+}
+
+// Чекбокс "без выходных" — сохраняется сразу по клику, без отдельной кнопки.
+document.addEventListener('change', function (e) {
+    if (e.target.matches('input[type="checkbox"][name^="weekend␟"]')) {
+        const body = new URLSearchParams();
+        body.set('field', e.target.name);
+        body.set('value', e.target.checked ? '1' : '0');
+        postIncomePlanField(body).catch(() => {});
+    } else if (e.target.matches('input[type="radio"][name^="mode␟"]')) {
+        // "edited" — разовое действие "поднять план уровня выше до суммы
+        // отредактированных ячеек прямо сейчас" (см. income_plan_save_field);
+        // "current" ничего не сохраняет, план уровня выше просто остаётся как был.
+        if (e.target.value !== 'edited') return;
+        const tr = e.target.closest('tr');
+        const editedSpan = tr ? tr.querySelector('.edited-total') : null;
+        const total = editedSpan ? parseMoneyInput(editedSpan.textContent) : 0;
+        const body = new URLSearchParams();
+        body.set('field', e.target.name);
+        body.set('value', 'edited');
+        body.set('total', String(total));
+        postIncomePlanField(body).catch(() => {});
+    }
+});
 
 // Режим просмотра (по умолчанию) / режим редактирования — переключатель в
 // шапке. В режиме просмотра план и факт видны (по чекбоксам), но ничего не
