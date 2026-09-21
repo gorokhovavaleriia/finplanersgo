@@ -13,7 +13,7 @@ from datetime import timedelta
 from . import income_plan
 from .fund_balance import DISTRIBUTION_START, resolve_share
 from .logic import aggregate
-from .models import PlanEntry
+from .models import ExpenseDailyPlan, PlanEntry
 
 _dir_key = income_plan.dir_key
 
@@ -72,22 +72,60 @@ def planned_daily_income(classified, income_categories, weekend_flags, start_dat
 
 
 def planned_daily_fund_expense(fund_names, start_date, end_date):
-    """{фонд: {день: плановый расход фонда за день}} — недельный PlanEntry
-    (группа = фонд) поделён поровну на 7 дней (у расходов дня недели, в
-    отличие от поступлений, не бывает)."""
-    by_fund_week = defaultdict(lambda: defaultdict(float))
-    for p in PlanEntry.objects.filter(group__in=fund_names):
-        by_fund_week[p.group][p.week_start] += float(p.amount)
+    """{фонд: {день: плановый расход фонда за день}} — по каждой строке
+    плана (группа/категория/подкатегория/направление):
+    - если по этой строке уже есть свои дни (ExpenseDailyPlan) — день без
+      своего значения среди них считается нулём (та же логика, что и в
+      plan_save_field/PLANDAY: недельная сумма — это сумма явно заданных
+      дней, непросмотренные дни в неё не входят);
+    - если дней ещё нет вообще (план вводили только неделей, дальше не
+      разворачивали) — неделя делится поровну на 7 дней, как и раньше.
+    Раньше здесь была всегда только вторая формула ("поровну на 7 дней"),
+    из-за чего плановый остаток не менялся при правке отдельных дней
+    недели, пока не пересохранишь её всю целиком.
+
+    У категории, разбитой по направлениям, строка с direction="" —
+    техническая (всегда равна сумме направлений, см.
+    expense_plan.recompute_category_weekly) и здесь не учитывается отдельно
+    — иначе расход посчитался бы дважды (и как сумма направлений, и как
+    сама эта строка)."""
+    entries = list(PlanEntry.objects.filter(group__in=fund_names))
+    split_categories = {
+        (p.group, p.category, p.subcategory) for p in entries if p.direction
+    }
 
     result = {fund: {} for fund in fund_names}
     if end_date < start_date:
         return result
     for fund in fund_names:
-        by_week = by_fund_week.get(fund, {})
         day = start_date
         while day <= end_date:
-            ws = _week_start(day)
-            result[fund][day] = by_week.get(ws, 0.0) / 7.0
+            result[fund][day] = 0.0
+            day += timedelta(days=1)
+
+    relevant_weeks = {p.week_start for p in entries}
+    daily_map = {}
+    rows_with_daily_data = set()
+    if relevant_weeks:
+        for d in ExpenseDailyPlan.objects.filter(
+            group__in=fund_names, day__gte=min(relevant_weeks), day__lte=max(relevant_weeks) + timedelta(days=6),
+        ):
+            row_key = (d.group, d.category, d.subcategory or "", d.direction or "")
+            daily_map[row_key + (d.day,)] = float(d.amount)
+            rows_with_daily_data.add(row_key + (d.day - timedelta(days=d.day.weekday()),))
+
+    for p in entries:
+        if p.direction == "" and (p.group, p.category, p.subcategory) in split_categories:
+            continue
+        row_key = (p.group, p.category, p.subcategory or "", p.direction or "")
+        has_daily_data = (row_key + (p.week_start,)) in rows_with_daily_data
+        weekly_total = float(p.amount)
+        default_daily = 0.0 if has_daily_data else weekly_total / 7.0
+        day = max(start_date, p.week_start)
+        last_day = min(end_date, p.week_start + timedelta(days=6))
+        while day <= last_day:
+            override = daily_map.get(row_key + (day,))
+            result[p.group][day] += override if override is not None else default_daily
             day += timedelta(days=1)
     return result
 
