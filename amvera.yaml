@@ -6,6 +6,10 @@ meta:
   build:
     requirementsPath: requirements.txt
 run:
-  command: python manage.py migrate && python manage.py ensure_superuser && python manage.py collectstatic --noinput && gunicorn kiwiweb.wsgi:application --bind 0.0.0.0:80
+  # --timeout 300: синхронизация с Финтабло (view sync_fintablo_now) может
+  # идти дольше дефолтных 30с gunicorn на приличном объёме операций — без
+  # этого мастер-процесс убивает воркер по таймауту, и вместо ответа
+  # Django (успех/ошибка) приходит голый "Internal Server Error".
+  command: python manage.py migrate && python manage.py ensure_superuser && python manage.py collectstatic --noinput && gunicorn kiwiweb.wsgi:application --bind 0.0.0.0:80 --timeout 300
   persistenceMount: /data
   containerPort: 80
