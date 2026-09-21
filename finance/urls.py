@@ -8,6 +8,7 @@ urlpatterns = [
     path("plan/", views.plan_default, name="plan"),
     path("upload/", views.upload_operations, name="upload"),
     path("sync-fintablo/", views.sync_fintablo_now, name="sync_fintablo"),
+    path("sync-fintablo-full/", views.sync_fintablo_full, name="sync_fintablo_full"),
     path("fund-transfers/", views.fund_transfers, name="fund_transfers"),
     path("fund-transfers/<int:pk>/delete/", views.fund_transfer_delete, name="fund_transfer_delete"),
 

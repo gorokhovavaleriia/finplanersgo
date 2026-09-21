@@ -17,10 +17,15 @@
 <h2 class="text-xl font-bold mt-8 mb-4">Синхронизация с Финтабло</h2>
 <div class="bg-white shadow rounded-lg p-6 max-w-md">
     <p class="mb-4 text-gray-600">Загружено из Финтабло: <strong>{{ fintablo_total }}</strong> операций.</p>
-    <form method="post" action="{% url 'sync_fintablo' %}">
+    <form method="post" action="{% url 'sync_fintablo' %}" class="inline">
         {% csrf_token %}
         <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">🔄 Синхронизировать сейчас</button>
     </form>
-    <p class="mt-3 text-sm text-gray-500">Подтягивает операции ДДС по токену из finance/data/secret.rtf — полностью, за всё время; повторный запуск не плодит дублей, только обновляет изменившееся. Тот же механизм можно запускать по расписанию: <code>python manage.py sync_fintablo</code>.</p>
+    <form method="post" action="{% url 'sync_fintablo_full' %}" class="inline"
+          onsubmit="return confirm('Полная синхронизация перечитывает всю историю с января 2026 заново — это медленнее обычной. Нужна, только если данные поправили задним числом прямо в Финтабло. Продолжить?');">
+        {% csrf_token %}
+        <button type="submit" class="bg-white border border-slate-800 text-slate-800 rounded px-4 py-2 hover:bg-slate-100">🔁 Полная синхронизация</button>
+    </form>
+    <p class="mt-3 text-sm text-gray-500">Обычная синхронизация подтягивает операции только за недавние дни (от последней уже загруженной, с небольшим запасом) — старые даты в Финтабло задним числом почти не меняются. Если всё же что-то поправили в старых данных — жмите "Полная синхронизация". Повторный запуск не плодит дублей, только обновляет изменившееся. Тот же механизм можно запускать по расписанию: <code>python manage.py sync_fintablo</code> (тоже по умолчанию только недавние дни, <code>--full-history</code> — вся история).</p>
 </div>
 {% endblock %}

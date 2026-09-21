@@ -9,9 +9,10 @@ Excel-вариант, см. finance.logic.operations.read_operations), чтоб�
 запуск обновляет изменившиеся операции и подчищает удалённые, не плодя
 дублей."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from django.db import transaction
+from django.db.models import Max
 
 from .fintablo import list_categories, list_directions, list_transactions
 from .models import Operation
@@ -27,6 +28,14 @@ UPDATE_BATCH_SIZE = 100
 # приложение всё равно считает фонды только с 30.08.2026, глубже не нужно.
 # Явный date_from в sync_operations() по-прежнему позволяет уйти дальше.
 DEFAULT_SYNC_FROM = date(2026, 1, 1)
+
+# Обычная синхронизация по кнопке/расписанию тянет не всю историю заново
+# (операции с уже прошедшими датами в Финтабло не меняются задним числом,
+# кроме редких ручных правок — под них есть отдельная "полная
+# синхронизация"), а только от последней уже загруженной даты с небольшим
+# запасом назад — на случай, если Финтабло проводит операцию за вчера с
+# задержкой в день-два.
+INCREMENTAL_LOOKBACK_DAYS = 3
 
 # group=transfer — перевод между своими счетами, не поступление и не
 # расход; group=income/outcome — то, что нас интересует. Плановые операции
@@ -49,6 +58,17 @@ def _category_name_map(categories):
 
 def _direction_name_map(directions):
     return {d["id"]: (d.get("name") or "") for d in directions}
+
+
+def incremental_sync_from():
+    """Дата, с которой начинать обычную синхронизацию — от последней уже
+    загруженной из API операции минус запас (см. INCREMENTAL_LOOKBACK_DAYS),
+    а не всегда от DEFAULT_SYNC_FROM. Если операций из API ещё нет вообще
+    (самая первая синхронизация) — DEFAULT_SYNC_FROM, как и раньше."""
+    latest = Operation.objects.filter(source=Operation.SOURCE_FINTABLO_API).aggregate(latest=Max("date"))["latest"]
+    if latest is None:
+        return DEFAULT_SYNC_FROM
+    return max(DEFAULT_SYNC_FROM, latest - timedelta(days=INCREMENTAL_LOOKBACK_DAYS))
 
 
 def _expand_splits(items):

@@ -10,7 +10,7 @@ from django.urls import reverse
 
 from . import expense_plan, fund_balance, income_plan, plan_projection, services
 from .fintablo import FintabloError
-from .fintablo_sync import DEFAULT_SYNC_FROM, sync_operations
+from .fintablo_sync import DEFAULT_SYNC_FROM, incremental_sync_from, sync_operations
 from .forms import FundTransferForm, UploadOperationsForm
 from .logic import aggregate, expenses, operations
 from .models import ExpenseDailyPlan, ExpenseMonthlyPlan, FundTransfer, Operation, PlanEntry
@@ -43,9 +43,33 @@ def upload_operations(request):
 
 @permission_required("finance.add_operation", raise_exception=True)
 def sync_fintablo_now(request):
-    """Синхронизация "по кнопке" — с DEFAULT_SYNC_FROM (2026-01-01) по
-    сегодня (та же логика, что и у периодического management-command'а
-    sync_fintablo, см. finance.fintablo_sync.sync_operations)."""
+    """Синхронизация "по кнопке" — от последней уже загруженной операции (с
+    запасом, см. incremental_sync_from), а не всей истории заново: старые
+    даты в Финтабло задним числом почти никогда не меняются, а тянуть и
+    перезаписывать их на каждый клик — просто медленнее без пользы. Для
+    редкого случая ручной правки в старых данных Финтабло — отдельная
+    кнопка "Полная синхронизация" (см. sync_fintablo_full)."""
+    if request.method == "POST":
+        try:
+            created, updated, deleted_api, deleted_excel = sync_operations(incremental_sync_from())
+        except FintabloError as e:
+            messages.error(request, str(e))
+        else:
+            messages.success(
+                request,
+                f"Финтабло: создано {created}, обновлено {updated}, удалено {deleted_api}"
+                + (f", заменено Excel-операций: {deleted_excel}" if deleted_excel else ""),
+            )
+    return redirect("upload")
+
+
+@permission_required("finance.add_operation", raise_exception=True)
+def sync_fintablo_full(request):
+    """Полная синхронизация — с DEFAULT_SYNC_FROM (2026-01-01), а не от
+    последней загруженной операции. Нужна, только если кто-то задним числом
+    поправил старые данные прямо в Финтабло — обычная синхронизация (см.
+    sync_fintablo_now) такие правки не увидит, раз не перечитывает старые
+    даты заново."""
     if request.method == "POST":
         try:
             created, updated, deleted_api, deleted_excel = sync_operations(DEFAULT_SYNC_FROM)
@@ -54,7 +78,7 @@ def sync_fintablo_now(request):
         else:
             messages.success(
                 request,
-                f"Финтабло: создано {created}, обновлено {updated}, удалено {deleted_api}"
+                f"Полная синхронизация Финтабло: создано {created}, обновлено {updated}, удалено {deleted_api}"
                 + (f", заменено Excel-операций: {deleted_excel}" if deleted_excel else ""),
             )
     return redirect("upload")
