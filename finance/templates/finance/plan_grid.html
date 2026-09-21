@@ -657,6 +657,10 @@ function applyCategoryCellUpdate(directionFieldName, categoryCell) {
     recalcEditedTotal(tr);
 }
 
+// keepalive: true на всех запросах автосохранения ниже — без него быстрый
+// клик по ссылке сразу после ввода (уйти со страницы до того, как fetch
+// успеет завершиться) браузер обрывает запрос вместе с уходом со страницы,
+// и правка молча теряется, хотя визуально казалось, что всё сохранилось.
 async function autosavePlanField(inp) {
     if (inp.value === inp.defaultValue) return;
     if (!confirmCascadeIfNeeded(inp)) return;
@@ -673,6 +677,7 @@ async function autosavePlanField(inp) {
             method: 'POST',
             headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
             body: body.toString(),
+            keepalive: true,
         });
         inp.classList.remove('opacity-50');
         if (resp.ok) {
@@ -725,6 +730,7 @@ async function autosaveIncomeField(inp) {
             method: 'POST',
             headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
             body: body.toString(),
+            keepalive: true,
         });
         inp.classList.remove('opacity-50');
         if (resp.ok) {
@@ -750,6 +756,7 @@ async function postIncomePlanField(body) {
         method: 'POST',
         headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
         body: body.toString(),
+        keepalive: true,
     });
 }
 

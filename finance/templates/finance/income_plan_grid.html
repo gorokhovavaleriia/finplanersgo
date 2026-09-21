@@ -6,18 +6,13 @@
 <h2 class="text-lg text-gray-600 mb-4">{{ period_title }}</h2>
 <p class="text-sm text-gray-500 mb-4">
     «Без выходных» — категория/направление приносит выручку и в субботу/воскресенье (план на неделю делится на 7 дней, а не на 5 будних).
-    {% if kind != "year" %}
-    «Текущий план» / «Отредактированный» — редактируете {% if kind == "week" %}дни{% else %}недели{% endif %}, а переключателем решаете:
-    оставить {% if kind == "week" %}недельный{% else %}месячный{% endif %} план как был («текущий план», по умолчанию — можно просто
-    поправить/посмотреть {% if kind == "week" %}один день{% else %}одну неделю{% endif %}, не трогая остальное), или поднять новую сумму
-    выше («отредактированный»).
-    {% endif %}
-    Чекбоксы и переключатели сохраняются вместе с планом, при нажатии «Сохранить план» — отдельно их сохранять не нужно.
+    Каждая ячейка сохраняется сама, как только вы уходите с поля — отдельной кнопки "Сохранить" нет.
+    {% if kind != "year" %}«Текущий план» — то, что было сохранено до этой правки; «Отредактированный» — сумма того, что введено сейчас.{% endif %}
 </p>
 
-<form method="post" action="{{ save_url }}" id="plan-form">
+<form id="plan-form" data-kind="{{ kind }}" data-year="{{ year }}" data-month="{{ month|default_if_none:'' }}" data-week-start="{{ week_start|default_if_none:'' }}"
+      data-save-income-field-url="{% url 'income_plan_save_field' %}" onsubmit="return false;">
 {% csrf_token %}
-<input type="hidden" name="next" value="{{ request.path }}">
 
 <div class="overflow-x-auto bg-white shadow rounded-lg">
 <table class="min-w-full text-sm">
@@ -46,7 +41,8 @@
         <tr class="bg-emerald-800 text-white font-bold">
             <td class="px-3 py-2 whitespace-nowrap">
                 {% if row.directions %}
-                <button type="button" class="cursor-pointer select-none" data-expanded="false" onclick="toggleIncomePlanCat(this, {{ forloop.counter0 }})">
+                <button type="button" class="cursor-pointer select-none" data-toggle="inccat" data-idx="{{ forloop.counter0 }}"
+                        data-key="inccat:{{ row.category }}" data-expanded="false" onclick="toggleIncomePlanCat(this, {{ forloop.counter0 }})">
                     <span class="arrow">▸</span> {{ row.category }}
                 </button>
                 {% else %}
@@ -63,7 +59,7 @@
             <td class="px-1 py-1">
                 {% if cell.editable %}
                 <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
-                       class="w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
                 {% else %}
                 <div class="px-2 py-1 text-right tabular-nums text-gray-300 italic">{{ cell.value|money0 }}</div>
                 {% endif %}
@@ -104,7 +100,7 @@
             {% for cell in dir.cells %}
             <td class="px-1 py-1">
                 <input type="text" name="{{ cell.field_name }}" value="{{ cell.value|money0 }}"
-                       class="w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
+                       class="plan-cell w-full border rounded px-2 py-1 text-right tabular-nums text-gray-900">
             </td>
             {% endfor %}
             <td class="px-3 py-2 text-right tabular-nums bg-gray-100">{{ dir.total|money0 }}</td>
@@ -135,20 +131,62 @@
     </tbody>
 </table>
 </div>
-
-<button type="submit" class="mt-4 bg-slate-800 text-white rounded px-4 py-2 hover:bg-slate-700">💾 Сохранить план</button>
 </form>
 
 <script>
-function toggleIncomePlanCat(btn, idx) {
-    const expanded = btn.dataset.expanded === 'true';
-    document.querySelectorAll('.inc-plan-dirrow-' + idx).forEach(el => el.classList.toggle('hidden', expanded));
-    btn.dataset.expanded = expanded ? 'false' : 'true';
-    btn.querySelector('.arrow').textContent = expanded ? '▸' : '▾';
+const planForm = document.getElementById('plan-form');
+
+// Развёрнутость категорий запоминается в localStorage — тот же ключ и та
+// же механика, что и на странице "План" (см. plan_grid.html), чтобы не
+// схлопывалось при переходе между годом/месяцем/неделей.
+const PLAN_EXPANDED_STORAGE_KEY = 'kiwi:plan:expanded';
+
+function _planExpandedMap() {
+    try {
+        return JSON.parse(localStorage.getItem(PLAN_EXPANDED_STORAGE_KEY) || '{}');
+    } catch (e) {
+        return {};
+    }
 }
 
+function _planSetExpanded(key, expanded) {
+    if (!key) return;
+    try {
+        const map = _planExpandedMap();
+        map[key] = expanded;
+        localStorage.setItem(PLAN_EXPANDED_STORAGE_KEY, JSON.stringify(map));
+    } catch (e) {}
+}
+
+function _planGetSavedExpanded(key) {
+    const map = _planExpandedMap();
+    return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : null;
+}
+
+function _applyIncomePlanCatState(btn, idx, expanded) {
+    document.querySelectorAll('.inc-plan-dirrow-' + idx).forEach(el => el.classList.toggle('hidden', !expanded));
+    btn.dataset.expanded = expanded ? 'true' : 'false';
+    btn.querySelector('.arrow').textContent = expanded ? '▾' : '▸';
+}
+
+function toggleIncomePlanCat(btn, idx) {
+    const expanded = btn.dataset.expanded === 'true';
+    const newState = !expanded;
+    _applyIncomePlanCatState(btn, idx, newState);
+    _planSetExpanded(btn.dataset.key, newState);
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-toggle="inccat"]').forEach(function (btn) {
+        const saved = _planGetSavedExpanded(btn.dataset.key);
+        if (saved === true) {
+            _applyIncomePlanCatState(btn, btn.dataset.idx, true);
+        }
+    });
+});
+
 function parseMoneyInput(s) {
-    return parseFloat((s || '0').replace(/\s| /g, '').replace(',', '.')) || 0;
+    return parseFloat((s || '0').replace(/\s| /g, '').replace(',', '.')) || 0;
 }
 
 function recalcEditedTotal(tr) {
@@ -162,6 +200,67 @@ function recalcEditedTotal(tr) {
 document.addEventListener('input', function (e) {
     if (e.target.matches('input.plan-cell')) {
         recalcEditedTotal(e.target.closest('tr'));
+    }
+});
+
+// Автосохранение по уходу с поля (blur) — см. plan_grid.html, тот же
+// принцип и тот же эндпоинт (income_plan_save_field). keepalive: true —
+// иначе быстрый клик по ссылке сразу после ввода обрывает ещё не
+// отправленный запрос вместе с уходом со страницы, и правка молча теряется.
+async function autosaveIncomeField(inp) {
+    if (inp.value === inp.defaultValue) return;
+
+    const csrfToken = planForm.querySelector('[name=csrfmiddlewaretoken]').value;
+    const body = new URLSearchParams();
+    body.set('field', inp.name);
+    body.set('value', inp.value);
+    body.set('kind', planForm.dataset.kind);
+    body.set('year', planForm.dataset.year);
+    if (planForm.dataset.month) body.set('month', planForm.dataset.month);
+    if (planForm.dataset.weekStart) body.set('week_start', planForm.dataset.weekStart);
+
+    inp.classList.add('opacity-50');
+    try {
+        const resp = await fetch(planForm.dataset.saveIncomeFieldUrl, {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+            body: body.toString(),
+            keepalive: true,
+        });
+        inp.classList.remove('opacity-50');
+        if (resp.ok) {
+            inp.defaultValue = inp.value;
+            inp.classList.add('ring-2', 'ring-emerald-400');
+            setTimeout(() => inp.classList.remove('ring-2', 'ring-emerald-400'), 800);
+        } else {
+            inp.classList.add('ring-2', 'ring-rose-400');
+        }
+    } catch (e) {
+        inp.classList.remove('opacity-50');
+        inp.classList.add('ring-2', 'ring-rose-400');
+    }
+}
+
+document.addEventListener('blur', function (e) {
+    if (e.target.matches('input[name^="iplan␟"]')) {
+        autosaveIncomeField(e.target);
+    }
+}, true);
+
+// Чекбокс "без выходных" — сохраняется сразу по клику.
+document.addEventListener('change', function (e) {
+    if (e.target.matches('input[type="checkbox"][name^="weekend␟"]')) {
+        const csrfToken = planForm.querySelector('[name=csrfmiddlewaretoken]').value;
+        const body = new URLSearchParams();
+        body.set('field', e.target.name);
+        body.set('value', e.target.checked ? '1' : '0');
+        body.set('kind', planForm.dataset.kind);
+        fetch(planForm.dataset.saveIncomeFieldUrl, {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+            body: body.toString(),
+            keepalive: true,
+        }).catch(() => {});
     }
 });
 </script>

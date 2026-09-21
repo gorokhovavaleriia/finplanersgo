@@ -1380,8 +1380,27 @@ def plan_save_field(request):
             day = date.fromisoformat(day_str)
         except (ValueError, IndexError):
             return JsonResponse({"ok": False, "error": "bad field"}, status=400)
-        expense_plan.apply_daily_plan(group, category, subcategory, direction, day, value)
         week_start_date = day - timedelta(days=day.weekday())
+
+        # Если у недели ещё нет ни одного явно сохранённого дня — сначала
+        # "материализуем" текущие показанные по умолчанию значения
+        # остальных дней (неделя/7), иначе первая же правка ОДНОГО дня
+        # обнулила бы остальные: пересчёт недельной суммы ниже видит только
+        # явно сохранённые дни, а плейсхолдер "неделя/7" нигде до этого не
+        # хранился — пользователь визуально видел его как часть плана, но
+        # по факту его как будто и не было.
+        has_any_day = any(
+            expense_plan.get_daily_plan(group, category, subcategory, direction, week_start_date + timedelta(days=i)) is not None
+            for i in range(7)
+        )
+        if not has_any_day:
+            default_v = (expense_plan.get_weekly_plan(group, category, subcategory, direction, week_start_date) or 0.0) / 7.0
+            for i in range(7):
+                d = week_start_date + timedelta(days=i)
+                if d != day:
+                    expense_plan.apply_daily_plan(group, category, subcategory, direction, d, default_v)
+
+        expense_plan.apply_daily_plan(group, category, subcategory, direction, day, value)
         week_total = 0.0
         for i in range(7):
             v = expense_plan.get_daily_plan(group, category, subcategory, direction, week_start_date + timedelta(days=i))
@@ -1487,8 +1506,24 @@ def income_plan_save_field(request):
             income_plan.apply_weekly_plan(category, direction, date.fromisoformat(suffix), value)
         elif kind == "week":
             day = date.fromisoformat(suffix)
-            income_plan.apply_daily_plan(category, direction, day, value)
             week_start_date = day - timedelta(days=day.weekday())
+
+            # Та же материализация плейсхолдеров, что и в plan_save_field
+            # (PLANDAY) для расходов — см. её комментарий. Дефолт по дням
+            # здесь не "неделя/7", а income_plan.daily_split (5 будних или
+            # 7 дней — в зависимости от чекбокса "без выходных").
+            has_any_day = any(
+                income_plan.get_daily_plan(category, direction, week_start_date + timedelta(days=i)) is not None
+                for i in range(7)
+            )
+            if not has_any_day:
+                works_weekends = income_plan.load_weekend_flags().get((category, direction), False)
+                weekly = income_plan.get_weekly_plan(category, direction, week_start_date)
+                for d, default_v in income_plan.daily_split(weekly, week_start_date, works_weekends):
+                    if default_v is not None and d != day:
+                        income_plan.apply_daily_plan(category, direction, d, default_v)
+
+            income_plan.apply_daily_plan(category, direction, day, value)
             week_total = 0.0
             for i in range(7):
                 v = income_plan.get_daily_plan(category, direction, week_start_date + timedelta(days=i))
@@ -1676,7 +1711,7 @@ def income_plan_month(request, year, month):
     weekend_flags = income_plan.load_weekend_flags()
     result = _income_plan_table_month(classified, income_categories, weekend_flags, year, month)
     ctx = {
-        "kind": "month", "year": year, **result,
+        "kind": "month", "year": year, "month": month, **result,
         "period_title": f"{aggregate.MONTH_NAMES[month - 1]} {year}",
         "home_url": reverse("income_plan_year", args=[year]),
         "save_url": reverse("income_plan_save_month", args=[year, month]),
@@ -1784,7 +1819,7 @@ def income_plan_week(request, year, month, week_start):
     weekend_flags = income_plan.load_weekend_flags()
     result = _income_plan_table_week(classified, income_categories, weekend_flags, start)
     ctx = {
-        "kind": "week", "year": year, **result,
+        "kind": "week", "year": year, "week_start": start.isoformat(), **result,
         "period_title": (
             f"{aggregate.MONTH_NAMES[start.month - 1]}, {start:%d.%m}–{end:%d.%m.%Y}"
         ),
