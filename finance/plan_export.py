@@ -83,6 +83,20 @@ def build_plan_workbook(ctx):
     write_row("Остаток", "Факт", ctx.get("grand_balance_row"), ctx.get("grand_balance_total"), bold=True)
     row += 1
 
+    # --- План поступлений по категориям/направлениям (встроенный блок
+    # "Планирование поступлений" — отдельная структура от групп по фондам
+    # ниже, см. views._income_plan_table_year/_month/_week) ---
+    income_plan_table = ctx.get("income_plan_table")
+    if income_plan_table:
+        write_section_header("ПЛАН ПОСТУПЛЕНИЙ ПО КАТЕГОРИЯМ")
+        for cat_row in income_plan_table:
+            write_row(cat_row["category"], "План", cat_row.get("cells"), cat_row.get("total"))
+            for d in cat_row.get("directions") or []:
+                d_label = "  ↳ " + (d["direction"] or "(без направления)")
+                write_row(d_label, "План", d.get("cells"), d.get("total"))
+        write_row("ИТОГО поступления (план)", "", ctx.get("income_plan_col_totals"), ctx.get("income_plan_grand_total"), bold=True)
+        row += 1
+
     # --- По фондам ---
     for group in ctx["groups"]:
         title = group["name"]
